@@ -1,0 +1,28 @@
+node_modules/
+.env
+auth/
+*(Isto impede que as pastas pesadas e os seus segredos vão para a internet).*
+
+**Passo 2: Enviar para o GitHub**
+O Railway puxa o código diretamente do GitHub.
+1. Crie uma conta no [GitHub](https://github.com/).
+2. Crie um novo repositório (privado).
+3. Faça o upload dos seus ficheiros (`index.js`, `package.json`, `.gitignore`) para lá.
+
+**Passo 3: Configurar o Railway**
+1. Vá ao [Railway.app](https://railway.app/) e inicie sessão com o seu GitHub.
+2. Clique em **New Project** -> **Deploy from GitHub repo** e escolha o repositório do seu bot.
+3. O Railway vai começar a tentar ligar o bot, mas **vai falhar**. É normal, faltam as variáveis!
+
+**Passo 4: Adicionar as Variáveis de Ambiente e Volume (Crucial)**
+1. No painel do Railway, clique no seu projeto e vá ao separador **Variables**.
+2. Clique em **New Variable**. No nome ponha `GROQ_API_KEY` e no valor cole a sua chave gigante do Groq. Clique em Add.
+3. Agora vá ao separador **Volumes**. *(O Railway apaga os ficheiros sempre que reinicia. Precisamos de um volume para guardar a pasta "auth" do WhatsApp, senão ele vai pedir o QR Code todos os dias).*
+4. Crie um novo Volume. No **Mount Path** (caminho de montagem), escreva: `/app/auth`
+
+**Passo 5: Ler o QR Code e Arrancar**
+1. Com as variáveis e o volume configurados, o Railway vai reiniciar o bot automaticamente.
+2. Vá ao separador **Deployments** e clique em **View Logs** (Ver Registos) no deployment mais recente.
+3. Fique a olhar para o terminal do Railway. Assim que aparecer o QR Code no ecrã negro, abra o seu telemóvel e leia-o através da opção "Dispositivos Ligados" no WhatsApp.
+
+Pronto! O bot vai dar "Conexão Estabelecida com Sucesso" nos logs e já pode fechar o site do Railway. O seu Argo's está agora online 24 horas por dia!

@@ -9,10 +9,10 @@ require('dotenv').config();
 
 // --- CONFIGURAÇÃO DO SERVIDOR EXPRESS (PONTE PARA O SITE) ---
 const app = express();
-app.use(express.json());
 
-// Configuração de CORS para permitir todos os domínios
-app.use(cors()); // Allow all domains to make requests
+// Configuração de CORS - DEVE SER POSICIONADO ANTES DE QUALQUER ROTA OU MIDDLEWARE JSON
+app.use(cors()); 
+app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
@@ -161,7 +161,8 @@ app.get('/api/status', (req, res) => {
     res.json({ name: "ARGO'S", online: !!botState.sock?.user, autoReply: botState.isAutoReplyActive });
 });
 
-app.listen(PORT, () => {
+// Escuta em 0.0.0.0 para garantir visibilidade externa no Railway
+app.listen(PORT, "0.0.0.0", () => {
     console.log(`[API] Ponte ARGO'S rodando na porta ${PORT}`);
 });
 

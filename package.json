@@ -1,17 +1,30 @@
 {
   "name": "argos-atendimento-ai",
-  "version": "1.1.0",
-  "description": "Bot WhatsApp ARGO'S com integração API para site gestaopro-five",
+  "version": "1.2.0",
+  "description": "Bot WhatsApp ARGO'S com integração API e proteção contra crash",
   "main": "index.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "start": "node index.js"
   },
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "ai",
+    "llama3",
+    "groq",
+    "api"
+  ],
+  "author": "ARGO'S System",
+  "license": "ISC",
   "dependencies": {
     "@whiskeysockets/baileys": "^6.6.0",
+    "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "groq-sdk": "^0.3.3",
-    "qrcode-terminal": "^0.12.0",
     "express": "^4.19.2",
-    "cors": "^2.8.5"
+    "groq-sdk": "^0.3.3",
+    "qrcode-terminal": "^0.12.0"
   }
 }

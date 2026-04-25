@@ -10,7 +10,9 @@ require('dotenv').config();
 // --- CONFIGURAÇÃO DO SERVIDOR EXPRESS (PONTE PARA O SITE) ---
 const app = express();
 app.use(express.json());
-app.use(cors()); // Permite que o site gestaopro-five.vercel.app aceda à API do bot
+
+// Configuração de CORS para permitir todos os domínios
+app.use(cors()); // Allow all domains to make requests
 
 const PORT = process.env.PORT || 3000;
 

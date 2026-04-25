@@ -1,41 +1,54 @@
-//#region Whatsapp
+//#region Whatsapp & Integração API
 
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion, delay, toNumber } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
-require('dotenv').config(); // Adicionado para ler o arquivo .env
-const { Groq } = require('groq-sdk'); // Adicionado o SDK do Groq
+const { Groq } = require('groq-sdk');
+const express = require('express');
+const cors = require('cors');
+require('dotenv').config();
 
-// Inicializa a conexão com o Groq usando a chave do .env
+// Inicialização do Servidor Express (Ponte para o Site)
+const app = express();
+app.use(express.json());
+app.use(cors());
+const PORT = process.env.PORT || 3000;
+
+// Configuração Groq
 const groq = new Groq({
-    apiKey: "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"
+    apiKey: process.env.GROQ_API_KEY || "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"
 });
 
 // =====================================================================
-// 🧠 CAMPO DE TREINAMENTO DA IA (PROMPT DE SISTEMA)
-// Edite este texto com todas as informações sobre a sua empresa!
+// 🧠 CONFIGURAÇÃO DO ARGO'S (PROMPT DE SISTEMA)
 // =====================================================================
-const INFORMACOES_EMPRESA = `Você é o Argo's, o assistente virtual inteligente da Estácio Jacuecanga - Angra dos reis.
-Sua missão é atender os clientes de forma educada, prestativa e natural, como um humano faria.
+const INFORMACOES_EMPRESA = `Você é o ARGO'S, o assistente virtual inteligente oficial.
+Sua Unidade de atuação é: Angra dos Reis.
 
-Aqui estão as informações da nossa empresa para você usar nas respostas:
-- O que fazemos: [Ex: Vendemos roupas masculinas e femininas].
-- Horário de Atendimento: [Ex: Segunda a Sexta, das 08h às 18h].
-- Endereço: [Ex: Rua das Flores, 123, Centro].
-- Preços/Catálogo: [Adicione aqui links ou faixas de preço].
+Sua missão é entender as dúvidas do cliente e responder com base nas informações do nosso sistema de gestão (gestaopro-five.vercel.app).
+Seu tom de voz deve ser: Profissional, eficiente, tecnológico e direto.
 
-Regras que você DEVE seguir:
-1. Seja sempre amigável e use emojis de forma moderada.
-2. Mantenha as respostas curtas e objetivas, ideais para o WhatsApp.
-3. Nunca invente informações. Se o cliente perguntar algo que não está nas suas informações, diga que vai verificar ou transferir para um atendente humano.`;
-// =====================================================================
+Aqui estão as diretrizes:
+- Nome: ARGO'S.
+- Unidade: Angra dos Reis.
+- Contexto: Você faz parte de um ecossistema de gestão para empresas e clientes.
+- Regra de Ouro: Sempre que não souber algo específico sobre um pedido, direcione o cliente para o painel do site gestaopro-five.vercel.app.
 
-async function Bot() {
+Regras de Resposta:
+1. Comece sempre de forma educada.
+2. Mantenha respostas curtas.
+3. Se o atendimento automático estiver desativado no sistema, você não deve responder (isso é controlado pelo servidor).`;
 
-    // 1. BUSCAR A VERSÃO ATUALIZADA (EVITA O ERRO 405)
+// Estado Global do Bot
+let botConfig = {
+    active: true, // Controlado pelo seu site via API
+    sock: null,
+    sessions: {}
+};
+
+async function startBot() {
     const { version } = await fetchLatestBaileysVersion();
     const { state, saveCreds } = await useMultiFileAuthState('auth/bot');
 
-    //Criando socket
     const sock = makeWASocket({
         version,
         auth: state,
@@ -43,131 +56,124 @@ async function Bot() {
         browser: ["Ubuntu", "Chrome", "20.0.04"],
     });
 
+    botConfig.sock = sock;
+
     sock.ev.on('creds.update', saveCreds);
+    
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-
-        //gerando Qrcode
         if (qr) {
-            console.clear(); 
-            console.log(`==========================================\nAPONTE O WHATSAPP PARA O QR CODE\n==========================================`);
+            console.log(`==========================================\nESCANEIE O QR CODE NO CONSOLE OU VIA LINK\n==========================================`);
             qrcode.generate(qr, { small: true });
+            const linkQrCode = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qr)}`;
+            console.log(`Link do QR Code: ${linkQrCode}`);
         }
 
-        //Não houve conexão
         if (connection === 'close') {
-            //Debug
-            const erroCode = lastDisconnect?.error?.output?.statusCode;
-            if (erroCode === 405) console.log("Erro 405 persistente. Tentando forçar nova versão...");
-        
-            //Reconexão
-            const deveReconectar = erroCode !== DisconnectReason.loggedOut;
-            if (deveReconectar) setTimeout(() => Bot(), 5000); 
-        
-        // Conectado
-        } else if (connection === 'open') console.log('--- CONEXÃO ESTABELECIDA COM SUCESSO ---');
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            if (shouldReconnect) setTimeout(() => startBot(), 5000);
+        } else if (connection === 'open') {
+            console.log('--- ARGO\'S ONLINE E CONECTADO ---');
+        }
     });
-    
-    flow.sock = sock;
+
+    // Ouvinte de Mensagens
     sock.ev.on("messages.upsert", async m => {
+        if (m.type !== "notify") return;
+        let msg = m.messages[0];
+        if (!msg.message || msg.key.fromMe || msg.key.remoteJid?.endsWith("@g.us")) return;
 
-        //filting
-        if(m.type !== "notify") return;
+        // VERIFICAÇÃO DE ATENDIMENTO AUTOMÁTICO (Botão no Site)
+        if (!botConfig.active) {
+            console.log("Atendimento automático do ARGO'S está desativado.");
+            return;
+        }
 
-        let _new = m.messages[0];
-        if(!_new.message || _new.key.fromMe || _new.key.remoteJid?.endsWith("@g.us")) return;
+        const jid = msg.key.remoteJid;
+        const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
 
-        //user message
-        await flow.core({
-            Jid: _new.key.remoteJid,
-            msg: _new.message?.conversation ||
-                 _new.message?.extendedTextMessage?.text ||
-                 _new.message?.imageMessage?.caption ||
-                 _new.message?.videoMessage?.caption ||
-                 _new.message?.documentMessage?.caption ||
-                 _new.message?.buttonsResponseMessage?.selectedButtonId ||
-                 _new.message?.listResponseMessage?.singleSelectReply?.selectedRowId ||
-                 _new.message?.templateButtonReplyMessage?.selectedId ||
-                "",
-        });
+        await processAIResponse(jid, text);
     });
-}; 
-
-//#endregion
-
-const flow = {
-
-    //information
-    sock: null,
-    sess: {},
-    version: "Argos Atendimento - Llama3 API: 0.1.0",
-
-    //methods
-    async core(_user) {
-
-        if (!_user.msg) return; // Ignora mensagens sem texto
-
-        //verificando se o usuario tem sessão salva
-        if(!this.sess[_user.Jid]) {
-
-            //adicionando usuario a base com histórico de chat vazio
-            this.sess[_user.Jid] = { model: "argos", chat: [] };
-        };
-
-        const sessao = this.sess[_user.Jid];
-
-        // 1. Adiciona a mensagem recebida ao histórico do cliente
-        sessao.chat.push({ role: "user", content: _user.msg });
-
-        // 2. Limita o histórico às últimas 15 mensagens para não sobrecarregar a memória da IA
-        if (sessao.chat.length > 15) {
-            sessao.chat.shift();
-        }
-
-        try {
-            // Avisa o WhatsApp que o bot está "digitando..."
-            await this.sock.sendPresenceUpdate("composing", _user.Jid);
-
-            // 3. Monta o pacote de mensagens (Instruções da Empresa + Histórico de Conversa)
-            const mensagensParaIA = [
-                { role: "system", content: INFORMACOES_EMPRESA },
-                ...sessao.chat
-            ];
-
-            // 4. Chama a API do Groq (Utilizando o Llama 3 - 8B, rápido e muito inteligente)
-            const chatCompletion = await groq.chat.completions.create({
-                messages: mensagensParaIA,
-                model: "llama3-8b-8192", 
-                temperature: 0.6, // Define a criatividade (0.0 a 1.0)
-                max_tokens: 500,  // Tamanho máximo da resposta
-            });
-
-            // 5. Pega a resposta gerada
-            const respostaIA = chatCompletion.choices[0]?.message?.content || "Desculpe, não consegui processar sua solicitação agora.";
-
-            // 6. Adiciona a resposta da IA no histórico para ela lembrar do que falou
-            sessao.chat.push({ role: "assistant", content: respostaIA });
-
-            // 7. Envia a resposta final para o usuário no WhatsApp
-            await this.send(_user.Jid, { text: respostaIA });
-
-        } catch (error) {
-            console.error("Erro ao chamar o Llama/Groq:", error);
-            await this.send(_user.Jid, { text: "Opa, meu sistema de inteligência está passando por uma pequena instabilidade. Tente me mandar um 'Oi' novamente em instantes!" });
-        }
-    },
-
-    async send(_jid, _msg = {}) {
-
-        await this.sock.sendPresenceUpdate("composing", _jid);
-        
-        // Correção de segurança: garante que length exista para evitar erros (NaN)
-        const textLength = _msg?.text?.length || _msg?.caption?.length || 50; 
-        await new Promise(resolve => setTimeout(resolve, Math.min(10000, textLength * 10)));
-
-        await this.sock.sendMessage(_jid, _msg);
-        await this.sock.sendPresenceUpdate('paused', _jid);
-    },
 }
 
-Bot();
+// Lógica da Inteligência Artificial
+async function processAIResponse(jid, text) {
+    if (!text) return;
+
+    if (!botConfig.sessions[jid]) {
+        botConfig.sessions[jid] = { chat: [] };
+    }
+
+    const session = botConfig.sessions[jid];
+    session.chat.push({ role: "user", content: text });
+
+    if (session.chat.length > 10) session.chat.shift();
+
+    try {
+        await botConfig.sock.sendPresenceUpdate("composing", jid);
+
+        const chatCompletion = await groq.chat.completions.create({
+            messages: [{ role: "system", content: INFORMACOES_EMPRESA }, ...session.chat],
+            model: "llama-3.1-8b-instant",
+            temperature: 0.5,
+        });
+
+        const reply = chatCompletion.choices[0]?.message?.content || "Estou processando sua solicitação.";
+        session.chat.push({ role: "assistant", content: reply });
+
+        await sendMessage(jid, { text: reply });
+
+    } catch (error) {
+        console.error("Erro Groq:", error);
+    }
+}
+
+// Função Auxiliar de Envio (Com Delay Humano)
+async function sendMessage(jid, content) {
+    const delayTime = (content.text?.length || 50) * 10;
+    await delay(Math.min(5000, delayTime));
+    await botConfig.sock.sendMessage(jid, content);
+}
+
+// =====================================================================
+// 🌉 PONTE API (ENDPOINT PARA O SEU SITE)
+// =====================================================================
+
+// 1. Rota para o site enviar mensagens manualmente (Botões do Site)
+app.post('/api/send-message', async (req, res) => {
+    const { number, message } = req.body;
+    if (!number || !message) return res.status(400).json({ error: "Número e mensagem obrigatórios" });
+
+    const jid = `${number.replace(/\D/g, '')}@s.whatsapp.net`;
+    
+    try {
+        await botConfig.sock.sendMessage(jid, { text: message });
+        res.json({ success: true, message: "Mensagem enviada pelo ARGO'S" });
+    } catch (err) {
+        res.status(500).json({ error: "Erro ao enviar", details: err.message });
+    }
+});
+
+// 2. Rota para Ativar/Desativar Atendimento Automático (Toggle no Site)
+app.post('/api/toggle-bot', (req, res) => {
+    const { status } = req.body; // true ou false
+    botConfig.active = status;
+    console.log(`Status do ARGO'S alterado para: ${status ? 'ATIVO' : 'INATIVO'}`);
+    res.json({ success: true, active: botConfig.active });
+});
+
+// 3. Status do Bot
+app.get('/api/status', (req, res) => {
+    res.json({ 
+        name: "ARGO'S", 
+        unit: "Angra dos Reis", 
+        active: botConfig.active, 
+        connected: !!botConfig.sock?.user 
+    });
+});
+
+app.listen(PORT, () => {
+    console.log(`Servidor API Ponte rodando na porta ${PORT}`);
+});
+
+startBot();

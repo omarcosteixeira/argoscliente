@@ -1,28 +1,35 @@
 node_modules/
 .env
 auth/
-*(Isto impede que as pastas pesadas e os seus segredos vão para a internet).*
+*(Isto garante que as pastas pesadas e os seus segredos não vão para a internet).*
 
-**Passo 2: Enviar para o GitHub**
-O Railway puxa o código diretamente do GitHub.
-1. Crie uma conta no [GitHub](https://github.com/).
-2. Crie um novo repositório (privado).
-3. Faça o upload dos seus ficheiros (`index.js`, `package.json`, `.gitignore`) para lá.
+### Passo 2: Enviar o código para o GitHub
+O Railway precisa de puxar o seu código a partir do GitHub.
+1. Crie uma conta no [GitHub](https://github.com/) (caso ainda não tenha).
+2. Crie um novo repositório **Privado**.
+3. Faça o upload dos seus ficheiros (`index.js`, `package.json`, `package-lock.json` e `.gitignore`) para esse repositório.
 
-**Passo 3: Configurar o Railway**
-1. Vá ao [Railway.app](https://railway.app/) e inicie sessão com o seu GitHub.
-2. Clique em **New Project** -> **Deploy from GitHub repo** e escolha o repositório do seu bot.
-3. O Railway vai começar a tentar ligar o bot, mas **vai falhar**. É normal, faltam as variáveis!
+### Passo 3: Configurar o Railway
+1. Vá ao [Railway.app](https://railway.app/) e inicie sessão utilizando a sua conta do GitHub.
+2. Clique no botão **New Project** (Novo Projeto) -> **Deploy from GitHub repo**.
+3. Selecione o repositório do seu bot que acabou de criar.
+4. Clique em **Deploy Now**.
+*(O Railway vai começar a tentar ligar o bot, mas é normal que falhe inicialmente, pois faltam as configurações de armazenamento e a chave da API).*
 
-**Passo 4: Adicionar as Variáveis de Ambiente e Volume (Crucial)**
-1. No painel do Railway, clique no seu projeto e vá ao separador **Variables**.
-2. Clique em **New Variable**. No nome ponha `GROQ_API_KEY` e no valor cole a sua chave gigante do Groq. Clique em Add.
-3. Agora vá ao separador **Volumes**. *(O Railway apaga os ficheiros sempre que reinicia. Precisamos de um volume para guardar a pasta "auth" do WhatsApp, senão ele vai pedir o QR Code todos os dias).*
-4. Crie um novo Volume. No **Mount Path** (caminho de montagem), escreva: `/app/auth`
+### Passo 4: Adicionar Variáveis e Volume (Muito Importante)
+1. No painel do seu projeto no Railway, clique no bloco do seu repositório e vá ao separador **Variables** (Variáveis).
+2. Clique em **New Variable**. 
+   * No **VARIABLE_NAME** escreva: `GROQ_API_KEY`
+   * No **VALUE** cole a sua chave: `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`
+   * Clique em **Add**.
+3. A seguir, vá ao separador **Volumes** no mesmo painel. *(Sem isto, o Railway apaga a sua sessão do WhatsApp sempre que reiniciar, obrigando a ler o QR Code todos os dias).*
+4. Clique em **Create Volume**.
+5. No campo **Mount Path** (Caminho de montagem), escreva exatamente isto: `/app/auth`
+6. Clique em **Add** ou **Save**.
 
-**Passo 5: Ler o QR Code e Arrancar**
-1. Com as variáveis e o volume configurados, o Railway vai reiniciar o bot automaticamente.
-2. Vá ao separador **Deployments** e clique em **View Logs** (Ver Registos) no deployment mais recente.
-3. Fique a olhar para o terminal do Railway. Assim que aparecer o QR Code no ecrã negro, abra o seu telemóvel e leia-o através da opção "Dispositivos Ligados" no WhatsApp.
+### Passo 5: Ler o QR Code e Arrancar
+1. Ao adicionar o Volume e a Variável, o Railway vai reiniciar o bot automaticamente com as novas configurações.
+2. Vá ao separador **Deployments** e clique em **View Logs** (Ver Registos) no deployment (implementação) mais recente.
+3. Fique a olhar para o terminal negro do Railway. Assim que a mensagem "APONTE O WHATSAPP PARA O QR CODE" aparecer com o desenho do QR Code, abra o WhatsApp no seu telemóvel, vá a "Dispositivos Ligados" e faça a leitura do código no ecrã do computador.
 
-Pronto! O bot vai dar "Conexão Estabelecida com Sucesso" nos logs e já pode fechar o site do Railway. O seu Argo's está agora online 24 horas por dia!
+Pronto! Assim que aparecer a mensagem `--- CONEXÃO ESTABELECIDA COM SUCESSO ---` nos logs, a "Ane" estará online de forma contínua no seu número. Já pode fechar o site do Railway.

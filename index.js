@@ -5,7 +5,23 @@ const qrcode = require('qrcode-terminal');
 const { Groq } = require('groq-sdk');
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs'); // Biblioteca nativa para manipulação de arquivos
 require('dotenv').config();
+
+// --- PROTEÇÃO GLOBAL CONTRA CRASHES (Evita o erro 502 no Railway) ---
+process.on('uncaughtException', (err) => {
+    console.error('[ERRO CRÍTICO NÃO TRATADO]:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[PROMISE REJEITADA NÃO TRATADA]:', reason);
+});
+
+// --- GARANTIR CRIAÇÃO DA PASTA DE AUTENTICAÇÃO ---
+const authFolder = './auth/bot';
+if (!fs.existsSync(authFolder)) {
+    fs.mkdirSync(authFolder, { recursive: true });
+    console.log(`[SISTEMA] Pasta ${authFolder} criada com sucesso para evitar crash do Baileys.`);
+}
 
 // --- CONFIGURAÇÃO DO SERVIDOR EXPRESS (INÍCIO IMEDIATO) ---
 const app = express();
@@ -54,7 +70,7 @@ async function startArgos() {
     
     try {
         const { version } = await fetchLatestBaileysVersion();
-        const { state, saveCreds } = await useMultiFileAuthState('auth/bot');
+        const { state, saveCreds } = await useMultiFileAuthState(authFolder);
 
         const sock = makeWASocket({
             version,
@@ -163,6 +179,9 @@ app.get('/api/status', (req, res) => {
 // ESCUTA O SERVIDOR (O HOST "0.0.0.0" É OBRIGATÓRIO NO RAILWAY)
 app.listen(PORT, "0.0.0.0", () => {
     console.log(`[SERVER] API Bridge rodando em 0.0.0.0:${PORT}`);
-    // Inicia o bot APÓS o servidor estar ouvindo para evitar timeout do Railway
-    startArgos();
+    
+    // Inicia o bot com pequeno atraso para garantir que a porta do Express já está 100% pronta para o Railway
+    setTimeout(() => {
+        startArgos();
+    }, 2000);
 });

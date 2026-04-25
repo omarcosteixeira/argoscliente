@@ -10,8 +10,13 @@ require('dotenv').config();
 // --- CONFIGURAÇÃO DO SERVIDOR EXPRESS (PONTE PARA O SITE) ---
 const app = express();
 
-// Configuração de CORS - DEVE SER POSICIONADO ANTES DE QUALQUER ROTA OU MIDDLEWARE JSON
-app.use(cors()); 
+// Configuração de CORS mais robusta para evitar o erro "Failed to fetch"
+app.use(cors({
+    origin: '*', // Permite qualquer origem (ideal para testes, pode ser restrito depois)
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
@@ -138,14 +143,26 @@ async function handleAIProcess(jid, text) {
 
 // --- ROTAS DA API (PONTE PARA O SITE) ---
 
+// Log de depuração para cada requisição recebida
+app.use((req, res, next) => {
+    console.log(`[REQ] ${req.method} ${req.url}`);
+    next();
+});
+
 // Enviar mensagem manual (Pelo botão do site)
 app.post('/api/send', async (req, res) => {
     const { number, message } = req.body;
+    
+    if (!botState.sock) {
+        return res.status(503).json({ error: "O bot ainda não está conectado." });
+    }
+
     const jid = `${number.replace(/\D/g, '')}@s.whatsapp.net`;
     try {
         await botState.sock.sendMessage(jid, { text: message });
         res.json({ success: true });
     } catch (e) {
+        console.error("Erro ao enviar mensagem via API:", e);
         res.status(500).json({ error: e.message });
     }
 });
@@ -153,17 +170,23 @@ app.post('/api/send', async (req, res) => {
 // Ligar/Desligar IA (Toggle no site)
 app.post('/api/toggle', (req, res) => {
     botState.isAutoReplyActive = req.body.active === true;
+    console.log(`Atendimento automático: ${botState.isAutoReplyActive ? 'ATIVADO' : 'DESATIVADO'}`);
     res.json({ success: true, isAutoReplyActive: botState.isAutoReplyActive });
 });
 
 // Status do Sistema
 app.get('/api/status', (req, res) => {
-    res.json({ name: "ARGO'S", online: !!botState.sock?.user, autoReply: botState.isAutoReplyActive });
+    res.json({ 
+        name: "ARGO'S", 
+        online: !!botState.sock?.user, 
+        autoReply: botState.isAutoReplyActive,
+        timestamp: new Date().toISOString()
+    });
 });
 
 // Escuta em 0.0.0.0 para garantir visibilidade externa no Railway
 app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[API] Ponte ARGO'S rodando na porta ${PORT}`);
+    console.log(`[SISTEMA] ARGO'S Bridge rodando em: 0.0.0.0:${PORT}`);
 });
 
 startArgos();

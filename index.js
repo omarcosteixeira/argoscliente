@@ -73,19 +73,23 @@ async function startBot(botNumber) {
         return;
     }
 
-    console.log(`[BOT] Iniciando conexão para o número: ${botNumber}...`);
+    console.log(`[BOT] Iniciando ligação para o número: ${botNumber}...`);
     
     const authFolder = `${authBaseFolder}/${botNumber}`;
     if (!fs.existsSync(authFolder)) fs.mkdirSync(authFolder, { recursive: true });
 
-    botInstances[botNumber] = {
-        sock: null,
-        isAutoReplyActive: true,
-        sessions: {},
-        status: 'initializing',
-        pairingCode: null,
-        qr: null // Adicionado para guardar o QR Code
-    };
+    if (!botInstances[botNumber]) {
+        botInstances[botNumber] = {
+            sock: null,
+            isAutoReplyActive: true,
+            sessions: {},
+            status: 'initializing',
+            pairingCode: null,
+            qr: null
+        };
+    } else {
+        botInstances[botNumber].status = 'initializing';
+    }
 
     try {
         const { version } = await fetchLatestBaileysVersion();
@@ -96,9 +100,8 @@ async function startBot(botNumber) {
             auth: state,
             logger: pino({ level: 'silent' }), 
             printQRInTerminal: false,
-            // --- MÁSCARA DE SERVIDOR ATIVADA ---
-            // Finge ser um PC Windows comum (reduz bloqueios do WhatsApp por IP estrangeiro)
-            browser: ["Windows", "Chrome", "122.0.0.0"], 
+            // Retornado para Ubuntu/Chrome pois é o padrão mais estável para o Pairing Code
+            browser: Browsers.ubuntu('Chrome'), 
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
             keepAliveIntervalMs: 10000,
@@ -114,14 +117,14 @@ async function startBot(botNumber) {
         // --- SISTEMA DE EMPARELHAMENTO POR CÓDIGO E QR CODE ---
         if (!state.creds.registered) {
             botInstances[botNumber].status = 'pairing';
-            console.log(`\n[SISTEMA] Preparando autenticação para: ${botNumber}...`);
+            console.log(`\n[SISTEMA] A preparar autenticação para: ${botNumber}...`);
             
             setTimeout(async () => {
                 try {
                     const code = await sock.requestPairingCode(botNumber);
                     botInstances[botNumber].pairingCode = code;
                     console.log(`\n======================================================`);
-                    console.log(`🔐 CÓDIGO DE CONEXÃO PARA ${botNumber}: ${code}`);
+                    console.log(`🔐 CÓDIGO DE LIGAÇÃO PARA ${botNumber}: ${code}`);
                     console.log(`⚠️ ATENÇÃO: Se o WhatsApp avisar sobre "Login Suspeito",`);
                     console.log(`   clique em "Fui eu" antes de inserir o código!`);
                     console.log(`======================================================\n`);
@@ -137,45 +140,45 @@ async function startBot(botNumber) {
 
             // --- TRATAMENTO DO QR CODE ---
             if (qr) {
-                botInstances[botNumber].qr = qr; // Guarda o QR no estado para o site acessar
+                botInstances[botNumber].qr = qr; 
                 const linkQrCode = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qr)}`;
                 
                 console.log(`\n======================================================`);
                 console.log(`📱 QR CODE GERADO PARA ${botNumber}`);
-                console.log(`Pode usar o código acima OU aceder ao link abaixo para escanear:`);
+                console.log(`Pode usar o código acima OU aceder ao link abaixo para digitalizar:`);
                 console.log(`${linkQrCode}`);
                 console.log(`======================================================\n`);
                 
-                // Opcional: Imprime também o QR no terminal do Railway
                 qrcode.generate(qr, { small: true });
             }
 
             if (connection === 'close') {
                 botInstances[botNumber].status = 'offline';
                 
-                // Obtém o código de erro do encerramento
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                
-                // 401: Unauthorized (Não Autorizado) | 403: Forbidden (Proibido/Bloqueado)
-                // Se o WhatsApp recusar o login, NÃO tentamos reconectar em loop.
                 const isLogout = statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 403;
+                const isRestartRequired = statusCode === DisconnectReason.restartRequired || statusCode === 515;
                 
-                console.log(`[CONEXÃO - ${botNumber}] Fechada. Código: ${statusCode}`);
-                
-                if (!isLogout) {
-                    console.log(`[CONEXÃO - ${botNumber}] Tentando reconectar em 5s...`);
+                if (isRestartRequired) {
+                    console.log(`[LIGAÇÃO - ${botNumber}] O WhatsApp solicitou um reinício (Código 515). A reconectar imediatamente...`);
+                    // CORREÇÃO: Limpar o socket antigo para permitir que startBot() crie um novo!
+                    botInstances[botNumber].sock = null; 
+                    setTimeout(() => startBot(botNumber), 2000);
+                } else if (!isLogout) {
+                    console.log(`[LIGAÇÃO - ${botNumber}] Fechada. Código: ${statusCode}. A tentar reconectar em 5s...`);
+                    // CORREÇÃO: Limpar o socket antigo para permitir que startBot() crie um novo!
+                    botInstances[botNumber].sock = null; 
                     setTimeout(() => startBot(botNumber), 5000); 
                 } else {
-                    console.log(`[SISTEMA - ${botNumber}] Dispositivo foi deslogado ou bloqueado por segurança (Erro ${statusCode}).`);
-                    console.log(`[SISTEMA - ${botNumber}] Apagando sessão corrompida para evitar loop...`);
-                    // Limpa a pasta problemática para uma nova tentativa fresca
+                    console.log(`[SISTEMA - ${botNumber}] O dispositivo terminou a sessão ou foi bloqueado por segurança (Erro ${statusCode}).`);
+                    console.log(`[SISTEMA - ${botNumber}] A apagar sessão corrompida para evitar loop...`);
                     try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch(e) {}
                     delete botInstances[botNumber];
                 }
             } else if (connection === 'open') {
                 botInstances[botNumber].status = 'online';
                 botInstances[botNumber].pairingCode = null; 
-                botInstances[botNumber].qr = null; // Limpa o QR Code pois já conectou
+                botInstances[botNumber].qr = null; 
                 console.log(`\n--- ARGO\'S ONLINE PARA O NÚMERO: ${botNumber} ---\n`);
             }
         });
@@ -197,6 +200,7 @@ async function startBot(botNumber) {
     } catch (error) {
         console.error(`[ERRO CRÍTICO] Falha ao iniciar o bot ${botNumber}:`, error);
         botInstances[botNumber].status = 'error';
+        botInstances[botNumber].sock = null; // Assegura que pode tentar novamente
         setTimeout(() => startBot(botNumber), 10000);
     }
 }
@@ -216,7 +220,7 @@ async function handleAIProcess(botNumber, jid, text) {
             model: "llama-3.1-8b-instant",
             temperature: 0.6
         });
-        const reply = response.choices[0]?.message?.content || "Estou processando sua dúvida.";
+        const reply = response.choices[0]?.message?.content || "Estou a processar a sua dúvida.";
         session.chat.push({ role: "assistant", content: reply });
         await delay(Math.min(reply.length * 15, 3000));
         await instance.sock.sendMessage(jid, { text: reply });
@@ -229,7 +233,7 @@ async function handleAIProcess(botNumber, jid, text) {
 // 🌐 ROTAS DA API PARA O SITE DE GESTÃO (GESTAOPRO)
 // =====================================================================
 
-// 1. CONECTAR NOVO NÚMERO (Gera Código de Emparelhamento)
+// 1. LIGAR NOVO NÚMERO (Gera Código de Emparelhamento)
 app.post('/api/connect', async (req, res) => {
     const { botNumber } = req.body;
     if (!botNumber) return res.status(400).json({ error: "O campo 'botNumber' é obrigatório." });
@@ -239,7 +243,7 @@ app.post('/api/connect', async (req, res) => {
     
     res.json({ 
         success: true, 
-        message: `Processo de conexão iniciado para ${cleanNumber}. Verifique a rota /api/status para obter o código de emparelhamento.` 
+        message: `Processo de ligação iniciado para ${cleanNumber}. Verifique a rota /api/status para obter o código de emparelhamento.` 
     });
 });
 
@@ -248,12 +252,12 @@ app.post('/api/send', async (req, res) => {
     const { botNumber, number, message } = req.body;
     
     if (!botNumber || !number || !message) {
-        return res.status(400).json({ error: "Campos 'botNumber', 'number' e 'message' são obrigatórios." });
+        return res.status(400).json({ error: "Os campos 'botNumber', 'number' e 'message' são obrigatórios." });
     }
 
     const instance = botInstances[botNumber];
     if (!instance || !instance.sock || instance.status !== 'online') {
-        return res.status(503).json({ error: `O bot ${botNumber} não está conectado.` });
+        return res.status(503).json({ error: `O bot ${botNumber} não está ligado.` });
     }
 
     const jid = `${number.replace(/\D/g, '')}@s.whatsapp.net`;
@@ -279,7 +283,7 @@ app.post('/api/toggle', (req, res) => {
     }
 });
 
-// 4. STATUS GLOBAL (Lista todos os bots, se estão online e os códigos de emparelhamento gerados)
+// 4. ESTADO GLOBAL (Lista todos os bots, se estão online e os códigos de emparelhamento gerados)
 app.get('/api/status', (req, res) => {
     const statusData = {};
     for (const [number, instance] of Object.entries(botInstances)) {
@@ -301,16 +305,16 @@ app.get('/api/status', (req, res) => {
 
 // ESCUTA O SERVIDOR E AUTO-LOADER
 app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[SERVER] API Multi-Device rodando em 0.0.0.0:${PORT}`);
+    console.log(`[SERVER] API Multi-Device a correr em 0.0.0.0:${PORT}`);
     
-    // Auto-Loader: Lê a pasta authBaseFolder e tenta ligar todos os números que já estavam registrados
+    // Auto-Loader: Lê a pasta authBaseFolder e tenta ligar todos os números que já estavam registados
     setTimeout(() => {
         try {
             const folders = fs.readdirSync(authBaseFolder);
             folders.forEach(folder => {
                 // Verifica se a pasta tem apenas números (formato de telefone)
                 if (/^\d+$/.test(folder)) {
-                    console.log(`[AUTO-LOADER] Inicializando sessão guardada para: ${folder}`);
+                    console.log(`[AUTO-LOADER] A inicializar sessão guardada para: ${folder}`);
                     startBot(folder);
                 }
             });

@@ -1,4 +1,4 @@
-//#region ARGO'S - WhatsApp & API Bridge (Angra dos Reis)
+//#region ARGO'S - WhatsApp & API Bridge (Multi-Device)
 
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion, delay } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
@@ -9,13 +9,6 @@ const fs = require('fs');
 const pino = require('pino'); 
 require('dotenv').config();
 
-// =====================================================================
-// ⚠️ CONFIGURAÇÃO DO SEU NÚMERO DE WHATSAPP (PARA EMPARELHAMENTO) ⚠️
-// Coloque o seu número com DDI (55) + DDD + Número. Sem espaços ou símbolos.
-// Exemplo: "5524999999999"
-// =====================================================================
-const MEU_NUMERO_WHATSAPP = "5524998633755"; 
-
 // --- PROTEÇÃO GLOBAL CONTRA CRASHES ---
 process.on('uncaughtException', (err) => {
     console.error('[ERRO CRÍTICO NÃO TRATADO]:', err);
@@ -24,18 +17,16 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('[PROMISE REJEITADA NÃO TRATADA]:', reason);
 });
 
-// --- GARANTIR CRIAÇÃO DA PASTA DE AUTENTICAÇÃO ---
-const authFolder = './auth/bot';
-if (!fs.existsSync(authFolder)) {
-    fs.mkdirSync(authFolder, { recursive: true });
-    console.log(`[SISTEMA] Pasta ${authFolder} criada com sucesso.`);
+// --- DIRETÓRIO BASE DE AUTENTICAÇÃO ---
+const authBaseFolder = './auth';
+if (!fs.existsSync(authBaseFolder)) {
+    fs.mkdirSync(authBaseFolder, { recursive: true });
 }
 
 // --- CONFIGURAÇÃO DO SERVIDOR EXPRESS ---
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// --- CONFIGURAÇÃO EXTREMA DE CORS ---
 app.use(cors()); 
 app.options('*', cors()); 
 app.use((req, res, next) => {
@@ -50,7 +41,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // ROTA DE SAÚDE RAIZ
 app.get('/', (req, res) => {
-    res.status(200).send("ARGO'S SYSTEM ONLINE E RESPONDENDO!");
+    res.status(200).send("ARGO'S MULTI-DEVICE SYSTEM ONLINE!");
 });
 
 // --- CONFIGURAÇÃO DA IA GROQ ---
@@ -70,16 +61,31 @@ Diretrizes de Resposta:
 5. Se o atendimento automático estiver desativado no sistema, você não deve responder.
 6. Nunca invente dados de pedidos. Direcione o cliente para o painel do site se necessário.`;
 
-// --- ESTADO GLOBAL DO BOT ---
-let botState = {
-    sock: null,
-    isAutoReplyActive: true,
-    sessions: {}
-};
+// =====================================================================
+// 🤖 GESTOR DE MÚLTIPLOS BOTS (MULTI-DEVICE)
+// =====================================================================
+// Estrutura: { "5524999999999": { sock, isAutoReplyActive, sessions, status, pairingCode } }
+const botInstances = {};
 
-async function startArgos() {
-    console.log("[BOT] Iniciando conexão com o WhatsApp...");
+async function startBot(botNumber) {
+    if (botInstances[botNumber] && botInstances[botNumber].sock) {
+        console.log(`[SISTEMA] Bot ${botNumber} já está em execução.`);
+        return;
+    }
+
+    console.log(`[BOT] Iniciando conexão para o número: ${botNumber}...`);
     
+    const authFolder = `${authBaseFolder}/${botNumber}`;
+    if (!fs.existsSync(authFolder)) fs.mkdirSync(authFolder, { recursive: true });
+
+    botInstances[botNumber] = {
+        sock: null,
+        isAutoReplyActive: true,
+        sessions: {},
+        status: 'initializing',
+        pairingCode: null
+    };
+
     try {
         const { version } = await fetchLatestBaileysVersion();
         const { state, saveCreds } = await useMultiFileAuthState(authFolder);
@@ -89,7 +95,6 @@ async function startArgos() {
             auth: state,
             logger: pino({ level: 'silent' }), 
             printQRInTerminal: false,
-            // O Browser precisa estar como Ubuntu/Chrome para o código de pareamento funcionar na API Baileys
             browser: ["Ubuntu", "Chrome", "20.0.04"], 
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
@@ -99,45 +104,49 @@ async function startArgos() {
             markOnlineOnConnect: true
         });
 
-        botState.sock = sock;
+        botInstances[botNumber].sock = sock;
 
         sock.ev.on('creds.update', saveCreds);
 
         // --- SISTEMA DE EMPARELHAMENTO POR CÓDIGO ---
-        if (MEU_NUMERO_WHATSAPP && !state.creds.registered) {
-            console.log(`\n[SISTEMA] Preparando para solicitar código de emparelhamento para: ${MEU_NUMERO_WHATSAPP}...`);
+        if (!state.creds.registered) {
+            botInstances[botNumber].status = 'pairing';
+            console.log(`\n[SISTEMA] Preparando código de emparelhamento para: ${botNumber}...`);
             
-            // Um pequeno delay para garantir que o socket foi criado antes de pedir o código
             setTimeout(async () => {
                 try {
-                    const code = await sock.requestPairingCode(MEU_NUMERO_WHATSAPP);
-                    console.log('\n======================================================');
-                    console.log(`🔐 CÓDIGO DE CONEXÃO: ${code}`);
-                    console.log('======================================================');
-                    console.log(`Vá ao WhatsApp > Aparelhos Conectados > Conectar Aparelho`);
-                    console.log(`Escolha a opção: "Conectar com número de telefone"`);
-                    console.log(`E insira o código acima!`);
-                    console.log('======================================================\n');
+                    const code = await sock.requestPairingCode(botNumber);
+                    botInstances[botNumber].pairingCode = code;
+                    console.log(`\n======================================================`);
+                    console.log(`🔐 CÓDIGO DE CONEXÃO PARA ${botNumber}: ${code}`);
+                    console.log(`======================================================\n`);
                 } catch (error) {
-                    console.error('[ERRO] Falha ao solicitar o código de pareamento:', error);
+                    console.error(`[ERRO] Falha ao solicitar código para ${botNumber}:`, error);
+                    botInstances[botNumber].status = 'error';
                 }
             }, 4000);
         }
 
         sock.ev.on('connection.update', (update) => {
-            const { connection, lastDisconnect, qr } = update;
-            
-            // Mantemos o QR Code apenas como backup (silencioso)
-            if (qr && (!MEU_NUMERO_WHATSAPP || state.creds.registered)) {
-                qrcode.generate(qr, { small: true });
-            }
+            const { connection, lastDisconnect } = update;
 
             if (connection === 'close') {
+                botInstances[botNumber].status = 'offline';
                 const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-                console.log(`[CONEXÃO] Fechada. Reconectando em 5s...`);
-                if (shouldReconnect) setTimeout(() => startArgos(), 5000); 
+                console.log(`[CONEXÃO - ${botNumber}] Fechada. Reconectando: ${shouldReconnect}`);
+                
+                if (shouldReconnect) {
+                    setTimeout(() => startBot(botNumber), 5000); 
+                } else {
+                    // Se foi deslogado (saiu no celular), limpa a pasta para poder conectar de novo no futuro
+                    console.log(`[SISTEMA] Dispositivo ${botNumber} foi desconectado manualmente.`);
+                    fs.rmSync(authFolder, { recursive: true, force: true });
+                    delete botInstances[botNumber];
+                }
             } else if (connection === 'open') {
-                console.log('--- ARGO\'S ONLINE: ANGRA DOS REIS ---');
+                botInstances[botNumber].status = 'online';
+                botInstances[botNumber].pairingCode = null; // Limpa o código pois já conectou
+                console.log(`--- ARGO\'S ONLINE PARA O NÚMERO: ${botNumber} ---`);
             }
         });
 
@@ -145,29 +154,33 @@ async function startArgos() {
             if (m.type !== "notify") return;
             let msg = m.messages[0];
             if (!msg.message || msg.key.fromMe || msg.key.remoteJid?.endsWith("@g.us")) return;
-            if (!botState.isAutoReplyActive) return;
+            
+            if (!botInstances[botNumber].isAutoReplyActive) return;
 
             const jid = msg.key.remoteJid;
             const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
             if (!text) return;
 
-            await handleAIProcess(jid, text);
+            await handleAIProcess(botNumber, jid, text);
         });
 
     } catch (error) {
-        console.error("[ERRO CRÍTICO] Falha ao iniciar o bot:", error);
-        setTimeout(startArgos, 10000);
+        console.error(`[ERRO CRÍTICO] Falha ao iniciar o bot ${botNumber}:`, error);
+        botInstances[botNumber].status = 'error';
+        setTimeout(() => startBot(botNumber), 10000);
     }
 }
 
-async function handleAIProcess(jid, text) {
-    if (!botState.sessions[jid]) botState.sessions[jid] = { chat: [] };
-    const session = botState.sessions[jid];
+async function handleAIProcess(botNumber, jid, text) {
+    const instance = botInstances[botNumber];
+    if (!instance.sessions[jid]) instance.sessions[jid] = { chat: [] };
+    
+    const session = instance.sessions[jid];
     session.chat.push({ role: "user", content: text });
     if (session.chat.length > 10) session.chat.shift();
 
     try {
-        await botState.sock.sendPresenceUpdate("composing", jid);
+        await instance.sock.sendPresenceUpdate("composing", jid);
         const response = await groq.chat.completions.create({
             messages: [{ role: "system", content: PROMPT_ARGOS }, ...session.chat],
             model: "llama-3.1-8b-instant",
@@ -176,45 +189,101 @@ async function handleAIProcess(jid, text) {
         const reply = response.choices[0]?.message?.content || "Estou processando sua dúvida.";
         session.chat.push({ role: "assistant", content: reply });
         await delay(Math.min(reply.length * 15, 3000));
-        await botState.sock.sendMessage(jid, { text: reply });
+        await instance.sock.sendMessage(jid, { text: reply });
     } catch (err) {
-        console.error("[ERRO AI]:", err);
+        console.error(`[ERRO AI - ${botNumber}]:`, err);
     }
 }
 
-// --- ROTAS DA API ---
+// =====================================================================
+// 🌐 ROTAS DA API PARA O SITE DE GESTÃO (GESTAOPRO)
+// =====================================================================
 
+// 1. CONECTAR NOVO NÚMERO (Gera Código de Emparelhamento)
+app.post('/api/connect', async (req, res) => {
+    const { botNumber } = req.body;
+    if (!botNumber) return res.status(400).json({ error: "O campo 'botNumber' é obrigatório." });
+
+    const cleanNumber = botNumber.replace(/\D/g, '');
+    await startBot(cleanNumber);
+    
+    res.json({ 
+        success: true, 
+        message: `Processo de conexão iniciado para ${cleanNumber}. Verifique a rota /api/status para obter o código de emparelhamento.` 
+    });
+});
+
+// 2. ENVIAR MENSAGEM (Agora exige especificar de qual bot a mensagem vai sair)
 app.post('/api/send', async (req, res) => {
-    const { number, message } = req.body;
-    if (!botState.sock) return res.status(503).json({ error: "Bot desconectado." });
+    const { botNumber, number, message } = req.body;
+    
+    if (!botNumber || !number || !message) {
+        return res.status(400).json({ error: "Campos 'botNumber', 'number' e 'message' são obrigatórios." });
+    }
+
+    const instance = botInstances[botNumber];
+    if (!instance || !instance.sock || instance.status !== 'online') {
+        return res.status(503).json({ error: `O bot ${botNumber} não está conectado.` });
+    }
+
     const jid = `${number.replace(/\D/g, '')}@s.whatsapp.net`;
     try {
-        await botState.sock.sendMessage(jid, { text: message });
-        res.json({ success: true });
+        await instance.sock.sendMessage(jid, { text: message });
+        res.json({ success: true, message: "Mensagem enviada com sucesso!" });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
+// 3. LIGAR/DESLIGAR IA POR NÚMERO
 app.post('/api/toggle', (req, res) => {
-    botState.isAutoReplyActive = req.body.active === true;
-    res.json({ success: true, active: botState.isAutoReplyActive });
+    const { botNumber, active } = req.body;
+    
+    if (!botNumber) return res.status(400).json({ error: "O campo 'botNumber' é obrigatório." });
+    
+    if (botInstances[botNumber]) {
+        botInstances[botNumber].isAutoReplyActive = active === true;
+        res.json({ success: true, botNumber, active: botInstances[botNumber].isAutoReplyActive });
+    } else {
+        res.status(404).json({ error: `Bot ${botNumber} não encontrado.` });
+    }
 });
 
+// 4. STATUS GLOBAL (Lista todos os bots, se estão online e os códigos de emparelhamento gerados)
 app.get('/api/status', (req, res) => {
+    const statusData = {};
+    for (const [number, instance] of Object.entries(botInstances)) {
+        statusData[number] = {
+            status: instance.status,
+            autoReply: instance.isAutoReplyActive,
+            pairingCode: instance.pairingCode // O site pega este código para exibir ao usuário
+        };
+    }
+
     res.json({ 
-        name: "ARGO'S", 
-        online: !!botState.sock?.user, 
-        autoReply: botState.isAutoReplyActive,
-        uptime: process.uptime()
+        system: "ARGO'S MULTI-DEVICE", 
+        uptime: process.uptime(),
+        bots: statusData
     });
 });
 
-// ESCUTA O SERVIDOR
+// ESCUTA O SERVIDOR E AUTO-LOADER
 app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[SERVER] API Bridge rodando em 0.0.0.0:${PORT}`);
+    console.log(`[SERVER] API Multi-Device rodando em 0.0.0.0:${PORT}`);
     
+    // Auto-Loader: Lê a pasta authBaseFolder e tenta ligar todos os números que já estavam registrados
     setTimeout(() => {
-        startArgos();
+        try {
+            const folders = fs.readdirSync(authBaseFolder);
+            folders.forEach(folder => {
+                // Verifica se a pasta tem apenas números (formato de telefone)
+                if (/^\d+$/.test(folder)) {
+                    console.log(`[AUTO-LOADER] Inicializando sessão guardada para: ${folder}`);
+                    startBot(folder);
+                }
+            });
+        } catch (e) {
+            console.log("[AUTO-LOADER] Nenhuma sessão anterior encontrada.");
+        }
     }, 5000);
 });

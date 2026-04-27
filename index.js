@@ -5,10 +5,10 @@ const qrcode = require('qrcode-terminal');
 const { Groq } = require('groq-sdk');
 const express = require('express');
 const cors = require('cors');
-const fs = require('fs'); // Biblioteca nativa para manipulação de arquivos
+const fs = require('fs');
 require('dotenv').config();
 
-// --- PROTEÇÃO GLOBAL CONTRA CRASHES (Evita o erro 502 no Railway) ---
+// --- PROTEÇÃO GLOBAL CONTRA CRASHES ---
 process.on('uncaughtException', (err) => {
     console.error('[ERRO CRÍTICO NÃO TRATADO]:', err);
 });
@@ -20,23 +20,27 @@ process.on('unhandledRejection', (reason, promise) => {
 const authFolder = './auth/bot';
 if (!fs.existsSync(authFolder)) {
     fs.mkdirSync(authFolder, { recursive: true });
-    console.log(`[SISTEMA] Pasta ${authFolder} criada com sucesso para evitar crash do Baileys.`);
+    console.log(`[SISTEMA] Pasta ${authFolder} criada com sucesso.`);
 }
 
-// --- CONFIGURAÇÃO DO SERVIDOR EXPRESS (INÍCIO IMEDIATO) ---
+// --- CONFIGURAÇÃO DO SERVIDOR EXPRESS ---
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Configuração de CORS robusta
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
+// --- CONFIGURAÇÃO EXTREMA DE CORS (Evita qualquer 'Failed to fetch') ---
+app.use(cors()); // Liberação base
+app.options('*', cors()); // Libera rotas de pré-verificação do navegador
+app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+    next();
+});
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// ROTA DE SAÚDE (FUNDAMENTAL PARA O RAILWAY NÃO DAR TIMEOUT)
+// ROTA DE SAÚDE RAIZ
 app.get('/', (req, res) => {
     res.status(200).send("ARGO'S SYSTEM ONLINE E RESPONDENDO!");
 });
@@ -176,14 +180,12 @@ app.get('/api/status', (req, res) => {
     });
 });
 
-// ESCUTA O SERVIDOR (O HOST "0.0.0.0" É OBRIGATÓRIO NO RAILWAY)
+// ESCUTA O SERVIDOR
 app.listen(PORT, "0.0.0.0", () => {
     console.log(`[SERVER] API Bridge rodando em 0.0.0.0:${PORT}`);
     
-    // --- BOT RELIGADO ---
-    // Como confirmamos que o servidor sobe normalmente e o problema era de URL no frontend,
-    // religamos o bot para ele gerar o QR Code no Railway.
+    // Atraso de 5 segundos para garantir que o Railway faça o healthcheck sem ser bloqueado
     setTimeout(() => {
         startArgos();
-    }, 2000);
+    }, 5000);
 });

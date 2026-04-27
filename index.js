@@ -6,6 +6,7 @@ const { Groq } = require('groq-sdk');
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
+const pino = require('pino'); // <-- IMPORTANTE: Biblioteca para silenciar logs internos
 require('dotenv').config();
 
 // --- PROTEÇÃO GLOBAL CONTRA CRASHES ---
@@ -79,14 +80,15 @@ async function startArgos() {
         const sock = makeWASocket({
             version,
             auth: state,
+            // --- AQUI ESTÁ A CORREÇÃO MÁXIMA PARA O RAILWAY ---
+            logger: pino({ level: 'silent' }), // Silencia os logs que travam o servidor
             printQRInTerminal: false,
             browser: ["ARGO'S System", "Chrome", "1.0.0"],
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
             keepAliveIntervalMs: 10000,
-            // --- MODO DE ECONOMIA EXTREMA DE MEMÓRIA (EVITA O CRASH NO RAILWAY) ---
-            syncFullHistory: false, // Impede que o bot baixe o histórico antigo de mensagens
-            generateHighQualityLinkPreview: false, // Desativa thumbnails pesadas
+            syncFullHistory: false, // Impede download do histórico
+            generateHighQualityLinkPreview: false, // Desativa miniaturas
             markOnlineOnConnect: true
         });
 
@@ -108,8 +110,9 @@ async function startArgos() {
 
             if (connection === 'close') {
                 const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-                console.log(`[CONEXÃO] Fechada. Motivo: ${lastDisconnect?.error}. Reconectando: ${shouldReconnect}`);
-                if (shouldReconnect) startArgos();
+                console.log(`[CONEXÃO] Fechada. Reconectando em 5s...`);
+                // Delay de 5s para evitar loop infinito que trava o Railway
+                if (shouldReconnect) setTimeout(() => startArgos(), 5000); 
             } else if (connection === 'open') {
                 console.log('--- ARGO\'S ONLINE: ANGRA DOS REIS ---');
             }

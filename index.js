@@ -83,7 +83,11 @@ async function startArgos() {
             browser: ["ARGO'S System", "Chrome", "1.0.0"],
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
-            keepAliveIntervalMs: 10000
+            keepAliveIntervalMs: 10000,
+            // --- MODO DE ECONOMIA EXTREMA DE MEMÓRIA (EVITA O CRASH NO RAILWAY) ---
+            syncFullHistory: false, // Impede que o bot baixe o histórico antigo de mensagens
+            generateHighQualityLinkPreview: false, // Desativa thumbnails pesadas
+            markOnlineOnConnect: true
         });
 
         botState.sock = sock;

@@ -26,7 +26,8 @@ if (!fs.existsSync(authFolder)) {
 
 // --- CONFIGURAÇÃO DO SERVIDOR EXPRESS ---
 const app = express();
-const PORT = process.env.PORT || 3000;
+// Ajustado para a porta 8080 conforme exigência do Railway
+const PORT = process.env.PORT || 8080;
 
 // --- CONFIGURAÇÃO EXTREMA DE CORS (Evita qualquer 'Failed to fetch') ---
 app.use(cors()); // Liberação base

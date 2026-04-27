@@ -64,7 +64,7 @@ Diretrizes de Resposta:
 // =====================================================================
 // 🤖 GESTOR DE MÚLTIPLOS BOTS (MULTI-DEVICE)
 // =====================================================================
-// Estrutura: { "5524999999999": { sock, isAutoReplyActive, sessions, status, pairingCode } }
+// Estrutura: { "5524999999999": { sock, isAutoReplyActive, sessions, status, pairingCode, qr } }
 const botInstances = {};
 
 async function startBot(botNumber) {
@@ -83,7 +83,8 @@ async function startBot(botNumber) {
         isAutoReplyActive: true,
         sessions: {},
         status: 'initializing',
-        pairingCode: null
+        pairingCode: null,
+        qr: null // Adicionado para guardar o QR Code
     };
 
     try {
@@ -95,8 +96,9 @@ async function startBot(botNumber) {
             auth: state,
             logger: pino({ level: 'silent' }), 
             printQRInTerminal: false,
-            // Utilizamos a configuração oficial da Baileys para disfarçar o servidor
-            browser: Browsers.ubuntu('Chrome'), 
+            // --- MÁSCARA DE SERVIDOR ATIVADA ---
+            // Finge ser um PC Windows comum (reduz bloqueios do WhatsApp por IP estrangeiro)
+            browser: ["Windows", "Chrome", "122.0.0.0"], 
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
             keepAliveIntervalMs: 10000,
@@ -109,10 +111,10 @@ async function startBot(botNumber) {
 
         sock.ev.on('creds.update', saveCreds);
 
-        // --- SISTEMA DE EMPARELHAMENTO POR CÓDIGO ---
+        // --- SISTEMA DE EMPARELHAMENTO POR CÓDIGO E QR CODE ---
         if (!state.creds.registered) {
             botInstances[botNumber].status = 'pairing';
-            console.log(`\n[SISTEMA] Preparando código de emparelhamento para: ${botNumber}...`);
+            console.log(`\n[SISTEMA] Preparando autenticação para: ${botNumber}...`);
             
             setTimeout(async () => {
                 try {
@@ -131,7 +133,22 @@ async function startBot(botNumber) {
         }
 
         sock.ev.on('connection.update', (update) => {
-            const { connection, lastDisconnect } = update;
+            const { connection, lastDisconnect, qr } = update;
+
+            // --- TRATAMENTO DO QR CODE ---
+            if (qr) {
+                botInstances[botNumber].qr = qr; // Guarda o QR no estado para o site acessar
+                const linkQrCode = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qr)}`;
+                
+                console.log(`\n======================================================`);
+                console.log(`📱 QR CODE GERADO PARA ${botNumber}`);
+                console.log(`Pode usar o código acima OU aceder ao link abaixo para escanear:`);
+                console.log(`${linkQrCode}`);
+                console.log(`======================================================\n`);
+                
+                // Opcional: Imprime também o QR no terminal do Railway
+                qrcode.generate(qr, { small: true });
+            }
 
             if (connection === 'close') {
                 botInstances[botNumber].status = 'offline';
@@ -157,7 +174,8 @@ async function startBot(botNumber) {
                 }
             } else if (connection === 'open') {
                 botInstances[botNumber].status = 'online';
-                botInstances[botNumber].pairingCode = null; // Limpa o código pois já conectou
+                botInstances[botNumber].pairingCode = null; 
+                botInstances[botNumber].qr = null; // Limpa o QR Code pois já conectou
                 console.log(`\n--- ARGO\'S ONLINE PARA O NÚMERO: ${botNumber} ---\n`);
             }
         });
@@ -268,7 +286,9 @@ app.get('/api/status', (req, res) => {
         statusData[number] = {
             status: instance.status,
             autoReply: instance.isAutoReplyActive,
-            pairingCode: instance.pairingCode // O site pega este código para exibir ao usuário
+            pairingCode: instance.pairingCode,
+            qrCode: instance.qr, // A string bruta do QR Code
+            qrUrl: instance.qr ? `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(instance.qr)}` : null // Link direto para a imagem
         };
     }
 

@@ -180,8 +180,11 @@ app.get('/api/status', (req, res) => {
 app.listen(PORT, "0.0.0.0", () => {
     console.log(`[SERVER] API Bridge rodando em 0.0.0.0:${PORT}`);
     
-    // Inicia o bot com pequeno atraso para garantir que a porta do Express já está 100% pronta para o Railway
-    setTimeout(() => {
-        startArgos();
-    }, 2000);
+    // --- MODO DE TESTE (ISOLAMENTO DE ERRO) ---
+    // Comentamos a inicialização do bot do WhatsApp para ver se o Express se mantém online.
+    // Se o GestãoPro conectar agora sem erro 502, o problema é confirmado no Baileys/auth.
+    
+    // setTimeout(() => {
+    //     startArgos();
+    // }, 2000);
 });

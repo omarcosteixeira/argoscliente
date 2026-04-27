@@ -6,8 +6,15 @@ const { Groq } = require('groq-sdk');
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
-const pino = require('pino'); // <-- IMPORTANTE: Biblioteca para silenciar logs internos
+const pino = require('pino'); 
 require('dotenv').config();
+
+// =====================================================================
+// ⚠️ CONFIGURAÇÃO DO SEU NÚMERO DE WHATSAPP (PARA EMPARELHAMENTO) ⚠️
+// Coloque o seu número com DDI (55) + DDD + Número. Sem espaços ou símbolos.
+// Exemplo: "5524999999999"
+// =====================================================================
+const MEU_NUMERO_WHATSAPP = "5524998633755"; 
 
 // --- PROTEÇÃO GLOBAL CONTRA CRASHES ---
 process.on('uncaughtException', (err) => {
@@ -26,12 +33,11 @@ if (!fs.existsSync(authFolder)) {
 
 // --- CONFIGURAÇÃO DO SERVIDOR EXPRESS ---
 const app = express();
-// Ajustado para a porta 8080 conforme exigência do Railway
 const PORT = process.env.PORT || 8080;
 
-// --- CONFIGURAÇÃO EXTREMA DE CORS (Evita qualquer 'Failed to fetch') ---
-app.use(cors()); // Liberação base
-app.options('*', cors()); // Libera rotas de pré-verificação do navegador
+// --- CONFIGURAÇÃO EXTREMA DE CORS ---
+app.use(cors()); 
+app.options('*', cors()); 
 app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin", "*");
     res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
@@ -81,15 +87,15 @@ async function startArgos() {
         const sock = makeWASocket({
             version,
             auth: state,
-            // --- AQUI ESTÁ A CORREÇÃO MÁXIMA PARA O RAILWAY ---
-            logger: pino({ level: 'silent' }), // Silencia os logs que travam o servidor
+            logger: pino({ level: 'silent' }), 
             printQRInTerminal: false,
-            browser: ["ARGO'S System", "Chrome", "1.0.0"],
+            // O Browser precisa estar como Ubuntu/Chrome para o código de pareamento funcionar na API Baileys
+            browser: ["Ubuntu", "Chrome", "20.0.04"], 
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
             keepAliveIntervalMs: 10000,
-            syncFullHistory: false, // Impede download do histórico
-            generateHighQualityLinkPreview: false, // Desativa miniaturas
+            syncFullHistory: false, 
+            generateHighQualityLinkPreview: false, 
             markOnlineOnConnect: true
         });
 
@@ -97,22 +103,38 @@ async function startArgos() {
 
         sock.ev.on('creds.update', saveCreds);
 
+        // --- SISTEMA DE EMPARELHAMENTO POR CÓDIGO ---
+        if (MEU_NUMERO_WHATSAPP && !state.creds.registered) {
+            console.log(`\n[SISTEMA] Preparando para solicitar código de emparelhamento para: ${MEU_NUMERO_WHATSAPP}...`);
+            
+            // Um pequeno delay para garantir que o socket foi criado antes de pedir o código
+            setTimeout(async () => {
+                try {
+                    const code = await sock.requestPairingCode(MEU_NUMERO_WHATSAPP);
+                    console.log('\n======================================================');
+                    console.log(`🔐 CÓDIGO DE CONEXÃO: ${code}`);
+                    console.log('======================================================');
+                    console.log(`Vá ao WhatsApp > Aparelhos Conectados > Conectar Aparelho`);
+                    console.log(`Escolha a opção: "Conectar com número de telefone"`);
+                    console.log(`E insira o código acima!`);
+                    console.log('======================================================\n');
+                } catch (error) {
+                    console.error('[ERRO] Falha ao solicitar o código de pareamento:', error);
+                }
+            }, 4000);
+        }
+
         sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect, qr } = update;
             
-            if (qr) {
-                console.log("\n==========================================");
-                console.log("APONTE O WHATSAPP PARA O ARGO'S");
-                const linkQrCode = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qr)}`;
-                console.log(`LINK DO QR CODE: ${linkQrCode}`);
-                console.log("==========================================\n");
+            // Mantemos o QR Code apenas como backup (silencioso)
+            if (qr && (!MEU_NUMERO_WHATSAPP || state.creds.registered)) {
                 qrcode.generate(qr, { small: true });
             }
 
             if (connection === 'close') {
                 const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
                 console.log(`[CONEXÃO] Fechada. Reconectando em 5s...`);
-                // Delay de 5s para evitar loop infinito que trava o Railway
                 if (shouldReconnect) setTimeout(() => startArgos(), 5000); 
             } else if (connection === 'open') {
                 console.log('--- ARGO\'S ONLINE: ANGRA DOS REIS ---');
@@ -192,7 +214,6 @@ app.get('/api/status', (req, res) => {
 app.listen(PORT, "0.0.0.0", () => {
     console.log(`[SERVER] API Bridge rodando em 0.0.0.0:${PORT}`);
     
-    // Atraso de 5 segundos para garantir que o Railway faça o healthcheck sem ser bloqueado
     setTimeout(() => {
         startArgos();
     }, 5000);

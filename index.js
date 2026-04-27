@@ -38,7 +38,7 @@ app.use(express.json());
 
 // ROTA DE SAÚDE (FUNDAMENTAL PARA O RAILWAY NÃO DAR TIMEOUT)
 app.get('/', (req, res) => {
-    res.status(200).send("ARGO'S SYSTEM ONLINE");
+    res.status(200).send("ARGO'S SYSTEM ONLINE E RESPONDENDO!");
 });
 
 // --- CONFIGURAÇÃO DA IA GROQ ---
@@ -180,11 +180,10 @@ app.get('/api/status', (req, res) => {
 app.listen(PORT, "0.0.0.0", () => {
     console.log(`[SERVER] API Bridge rodando em 0.0.0.0:${PORT}`);
     
-    // --- MODO DE TESTE (ISOLAMENTO DE ERRO) ---
-    // Comentamos a inicialização do bot do WhatsApp para ver se o Express se mantém online.
-    // Se o GestãoPro conectar agora sem erro 502, o problema é confirmado no Baileys/auth.
-    
-    // setTimeout(() => {
-    //     startArgos();
-    // }, 2000);
+    // --- BOT RELIGADO ---
+    // Como confirmamos que o servidor sobe normalmente e o problema era de URL no frontend,
+    // religamos o bot para ele gerar o QR Code no Railway.
+    setTimeout(() => {
+        startArgos();
+    }, 2000);
 });

@@ -1,6 +1,6 @@
 //#region ARGO'S - WhatsApp & API Bridge (Multi-Device)
 
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion, delay } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion, delay, Browsers } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const { Groq } = require('groq-sdk');
 const express = require('express');
@@ -95,7 +95,8 @@ async function startBot(botNumber) {
             auth: state,
             logger: pino({ level: 'silent' }), 
             printQRInTerminal: false,
-            browser: ["Ubuntu", "Chrome", "20.0.04"], 
+            // Utilizamos a configuração oficial da Baileys para disfarçar o servidor
+            browser: Browsers.ubuntu('Chrome'), 
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
             keepAliveIntervalMs: 10000,
@@ -119,6 +120,8 @@ async function startBot(botNumber) {
                     botInstances[botNumber].pairingCode = code;
                     console.log(`\n======================================================`);
                     console.log(`🔐 CÓDIGO DE CONEXÃO PARA ${botNumber}: ${code}`);
+                    console.log(`⚠️ ATENÇÃO: Se o WhatsApp avisar sobre "Login Suspeito",`);
+                    console.log(`   clique em "Fui eu" antes de inserir o código!`);
                     console.log(`======================================================\n`);
                 } catch (error) {
                     console.error(`[ERRO] Falha ao solicitar código para ${botNumber}:`, error);
@@ -132,21 +135,30 @@ async function startBot(botNumber) {
 
             if (connection === 'close') {
                 botInstances[botNumber].status = 'offline';
-                const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-                console.log(`[CONEXÃO - ${botNumber}] Fechada. Reconectando: ${shouldReconnect}`);
                 
-                if (shouldReconnect) {
+                // Obtém o código de erro do encerramento
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                
+                // 401: Unauthorized (Não Autorizado) | 403: Forbidden (Proibido/Bloqueado)
+                // Se o WhatsApp recusar o login, NÃO tentamos reconectar em loop.
+                const isLogout = statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 403;
+                
+                console.log(`[CONEXÃO - ${botNumber}] Fechada. Código: ${statusCode}`);
+                
+                if (!isLogout) {
+                    console.log(`[CONEXÃO - ${botNumber}] Tentando reconectar em 5s...`);
                     setTimeout(() => startBot(botNumber), 5000); 
                 } else {
-                    // Se foi deslogado (saiu no celular), limpa a pasta para poder conectar de novo no futuro
-                    console.log(`[SISTEMA] Dispositivo ${botNumber} foi desconectado manualmente.`);
-                    fs.rmSync(authFolder, { recursive: true, force: true });
+                    console.log(`[SISTEMA - ${botNumber}] Dispositivo foi deslogado ou bloqueado por segurança (Erro ${statusCode}).`);
+                    console.log(`[SISTEMA - ${botNumber}] Apagando sessão corrompida para evitar loop...`);
+                    // Limpa a pasta problemática para uma nova tentativa fresca
+                    try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch(e) {}
                     delete botInstances[botNumber];
                 }
             } else if (connection === 'open') {
                 botInstances[botNumber].status = 'online';
                 botInstances[botNumber].pairingCode = null; // Limpa o código pois já conectou
-                console.log(`--- ARGO\'S ONLINE PARA O NÚMERO: ${botNumber} ---`);
+                console.log(`\n--- ARGO\'S ONLINE PARA O NÚMERO: ${botNumber} ---\n`);
             }
         });
 

@@ -80,7 +80,9 @@ async function startBot(botNumber) {
     if (!botInstances[botNumber]) {
         botInstances[botNumber] = {
             sock: null,
-            isAutoReplyActive: true,
+            // A IA AGORA INICIA DESLIGADA POR PADRÃO.
+            // O seu painel deve enviar a requisição para a ligar.
+            isAutoReplyActive: false, 
             sessions: {},
             status: 'initializing',
             pairingCode: null,
@@ -160,12 +162,10 @@ async function startBot(botNumber) {
                 
                 if (isRestartRequired) {
                     console.log(`[LIGAÇÃO - ${botNumber}] O WhatsApp solicitou um reinício (Código 515). A reconectar imediatamente...`);
-                    // CORREÇÃO: Limpar o socket antigo para permitir que startBot() crie um novo!
                     botInstances[botNumber].sock = null; 
                     setTimeout(() => startBot(botNumber), 2000);
                 } else if (!isLogout) {
                     console.log(`[LIGAÇÃO - ${botNumber}] Fechada. Código: ${statusCode}. A tentar reconectar em 5s...`);
-                    // CORREÇÃO: Limpar o socket antigo para permitir que startBot() crie um novo!
                     botInstances[botNumber].sock = null; 
                     setTimeout(() => startBot(botNumber), 5000); 
                 } else {
@@ -187,6 +187,7 @@ async function startBot(botNumber) {
             let msg = m.messages[0];
             if (!msg.message || msg.key.fromMe || msg.key.remoteJid?.endsWith("@g.us")) return;
             
+            // Se a IA estiver desligada (padrão), o bot não faz nada (ignora a mensagem automaticamente).
             if (!botInstances[botNumber].isAutoReplyActive) return;
 
             const jid = msg.key.remoteJid;
@@ -282,7 +283,37 @@ app.post('/api/toggle', (req, res) => {
     }
 });
 
-// 4. ESTADO GLOBAL (Lista todos os bots, se estão online e os códigos de emparelhamento gerados)
+// 4. RESETAR SESSÃO CORROMPIDA (Remove erros de 'Bad MAC')
+app.post('/api/reset', (req, res) => {
+    const { botNumber } = req.body;
+    if (!botNumber) return res.status(400).json({ error: "O campo 'botNumber' é obrigatório." });
+
+    const cleanNumber = botNumber.replace(/\D/g, '');
+    const authFolder = `${authBaseFolder}/${cleanNumber}`;
+    
+    try {
+        // Desliga a instância se estiver em loop/online
+        if (botInstances[cleanNumber] && botInstances[cleanNumber].sock) {
+            botInstances[cleanNumber].sock.logout().catch(() => {});
+            botInstances[cleanNumber].sock.end(undefined);
+        }
+        
+        // Apaga fisicamente a pasta de chaves corrompidas do Railway
+        if (fs.existsSync(authFolder)) {
+            fs.rmSync(authFolder, { recursive: true, force: true });
+        }
+        
+        // Remove da memória do bot
+        delete botInstances[cleanNumber];
+        
+        console.log(`[SISTEMA] Sessão do número ${cleanNumber} foi limpa (Reset manual).`);
+        res.json({ success: true, message: `A sessão corrompida de ${cleanNumber} foi completamente apagada. Pode gerar um novo código de ligação agora!` });
+    } catch (error) {
+        res.status(500).json({ error: "Erro ao tentar limpar a sessão: " + error.message });
+    }
+});
+
+// 5. ESTADO GLOBAL (Lista todos os bots, se estão online e os códigos de emparelhamento gerados)
 app.get('/api/status', (req, res) => {
     const statusData = {};
     for (const [number, instance] of Object.entries(botInstances)) {

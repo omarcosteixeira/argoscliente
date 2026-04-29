@@ -247,8 +247,8 @@ app.post('/api/connect', async (req, res) => {
     });
 });
 
-// 2. ENVIAR MENSAGEM (Agora exige especificar de qual bot a mensagem vai sair)
-app.post('/api/send', async (req, res) => {
+// 2. ENVIAR MENSAGEM (Com Sistema de Fila para Disparos em Massa)
+app.post('/api/send', (req, res) => {
     const { botNumber, number, message } = req.body;
     
     if (!botNumber || !number || !message) {
@@ -261,12 +261,29 @@ app.post('/api/send', async (req, res) => {
     }
 
     const jid = `${number.replace(/\D/g, '')}@s.whatsapp.net`;
-    try {
-        await instance.sock.sendMessage(jid, { text: message });
-        res.json({ success: true, message: "Mensagem enviada com sucesso!" });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
+
+    // Cria a fila de envios se não existir para este bot
+    if (!instance.sendQueue) {
+        instance.sendQueue = Promise.resolve();
     }
+
+    // Adiciona a mensagem à fila para ser processada em background
+    instance.sendQueue = instance.sendQueue.then(async () => {
+        try {
+            // Atraso de segurança aleatório entre 1.5s e 3.5s (Impede que o WhatsApp bloqueie por Spam e o Railway trave)
+            const waitTime = 1500 + Math.floor(Math.random() * 2000);
+            await delay(waitTime);
+
+            await instance.sock.sendMessage(jid, { text: message });
+            console.log(`[DISPARO] Mensagem enviada para ${jid} via bot ${botNumber}`);
+        } catch (e) {
+            console.error(`[ERRO DISPARO] Falha ao enviar para ${jid}:`, e.message);
+        }
+    }).catch(err => console.error("Erro na fila de envio:", err));
+
+    // O Servidor responde IMEDIATAMENTE ao seu site, sem esperar a mensagem sair do telemóvel.
+    // Isto elimina para sempre o "Erro de rede / CORS / Offline" na sua tela.
+    res.json({ success: true, message: "Mensagem adicionada à fila de disparo!" });
 });
 
 // 3. LIGAR/DESLIGAR IA POR NÚMERO

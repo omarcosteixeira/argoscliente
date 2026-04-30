@@ -75,18 +75,39 @@ async function processQueue(botNumber) {
 
     // Enquanto houver itens na lista de espera
     while (instance.sendQueue && instance.sendQueue.length > 0) {
+        
+        // Se a ligação cair (Ex: Erro 503), a fila PAUSA e não perde as mensagens!
+        if (instance.status !== 'online' || !instance.sock) {
+            console.log(`[FILA] Bot ${botNumber} está offline (Erro 503). Fila em pausa. A aguardar...`);
+            await delay(5000);
+            continue; // Volta ao início do ciclo sem remover a mensagem da fila
+        }
+
         // Retira o primeiro item da fila
         const { jid, text } = instance.sendQueue.shift();
         
         try {
-            // Atraso de 1.5s a 3.5s entre disparos para não ser banido nem travar a CPU
-            const waitTime = 1500 + Math.floor(Math.random() * 2000);
+            // Atraso seguro entre disparos para não ser banido nem travar a CPU
+            const waitTime = 2000 + Math.floor(Math.random() * 2000);
             await delay(waitTime);
 
-            await instance.sock.sendMessage(jid, { text });
-            console.log(`[DISPARO] Mensagem enviada para ${jid} via bot ${botNumber} | Restam: ${instance.sendQueue.length}`);
+            // --- VALIDAÇÃO OFICIAL DO WHATSAPP ---
+            // Pergunta ao servidor do WhatsApp se o número existe e qual é o formato correto (corrige o 9 dígito)
+            const [waStatus] = await instance.sock.onWhatsApp(jid);
+
+            if (waStatus && waStatus.exists) {
+                // Envia para o JID real validado pela Meta
+                await instance.sock.sendMessage(waStatus.jid, { text });
+                console.log(`[DISPARO] Mensagem entregue a ${waStatus.jid} via bot ${botNumber} | Restam: ${instance.sendQueue.length}`);
+            } else {
+                console.log(`[AVISO] O número ${jid} não tem WhatsApp ou é inválido. Disparo ignorado.`);
+            }
         } catch (e) {
             console.error(`[ERRO DISPARO] Falha ao enviar para ${jid}:`, e.message || e);
+            // Se a falha foi porque a ligação caiu no momento exato do envio, devolve a mensagem à fila
+            if (e.message && e.message.toLowerCase().includes('closed')) {
+                instance.sendQueue.unshift({ jid, text });
+            }
         }
     }
     
@@ -132,10 +153,12 @@ async function startBot(botNumber) {
             browser: Browsers.ubuntu('Chrome'), 
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
-            keepAliveIntervalMs: 10000,
+            // Aumentado para 30s para reduzir as quedas com o Erro 503
+            keepAliveIntervalMs: 30000, 
             syncFullHistory: false, 
             generateHighQualityLinkPreview: false, 
-            markOnlineOnConnect: true
+            // Desligado para evitar conflitos de sessão que geram o erro 503
+            markOnlineOnConnect: false 
         });
 
         botInstances[botNumber].sock = sock;
@@ -178,7 +201,7 @@ async function startBot(botNumber) {
                 const isRestartRequired = statusCode === DisconnectReason.restartRequired || statusCode === 515;
                 
                 if (isRestartRequired) {
-                    console.log(`[LIGAÇÃO - ${botNumber}] O WhatsApp solicitou um reinício (Código 515). A reconectar imediatamente...`);
+                    console.log(`[LIGAÇÃO - ${botNumber}] O WhatsApp solicitou um reinício. A reconectar imediatamente...`);
                     botInstances[botNumber].sock = null; 
                     setTimeout(() => startBot(botNumber), 2000);
                 } else if (!isLogout) {
@@ -248,9 +271,15 @@ async function handleAIProcess(botNumber, jid, text) {
 // 🌐 ROTAS DA API PARA O SITE DE GESTÃO (GESTAOPRO)
 // =====================================================================
 
-// Função auxiliar para garantir o DDI 55 (Brasil) automaticamente
+// Função auxiliar para garantir o DDI 55 (Brasil) e evitar DDD duplicado
 function formatNumberBR(number) {
     let clean = number.toString().replace(/\D/g, '');
+    
+    // CORREÇÃO: Remove o DDD se ele vier duplicado do seu painel (ex: 24249...)
+    if (clean.length === 13 && clean.substring(0, 2) === clean.substring(2, 4)) {
+        clean = clean.substring(2);
+    }
+
     // Se o número tiver 10 ou 11 dígitos (ex: 24999998888) e não começar por 55, adiciona o 55
     if ((clean.length === 10 || clean.length === 11) && !clean.startsWith('55')) {
         clean = '55' + clean;
@@ -268,7 +297,7 @@ app.post('/api/connect', async (req, res) => {
     res.json({ success: true, message: `Processo de ligação iniciado para ${cleanNumber}.` });
 });
 
-// 2. ENVIAR MENSAGEM (Com Novo Sistema de Fila Físico - Otimizado para RAM)
+// 2. ENVIAR MENSAGEM (Com Novo Sistema de Fila Físico e Validação da Meta)
 app.post('/api/send', (req, res) => {
     const { botNumber, number, message } = req.body;
     

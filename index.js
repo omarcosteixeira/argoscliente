@@ -45,8 +45,8 @@ app.get('/', (req, res) => {
 
 // --- CONFIGURAÇÃO DA IA GROQ ---
 const groq = new Groq({
-    // Removemos a chave antiga. Agora o bot lê APENAS do painel do Railway
-    apiKey: process.env.GROQ_API_KEY
+    // Lê do Railway primeiro. Se não achar, usa a sua chave nova diretamente!
+    apiKey: process.env.GROQ_API_KEY || "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"
 });
 
 const PROMPT_ARGOS = `Você é o ARGO'S, o assistente virtual inteligente oficial.
@@ -226,7 +226,7 @@ async function handleAIProcess(botNumber, jid, text) {
         await delay(Math.min(reply.length * 15, 3000));
         await instance.sock.sendMessage(jid, { text: reply });
     } catch (err) {
-        console.error(`[ERRO AI - ${botNumber}]:`, err);
+        console.error(`[ERRO AI - ${botNumber}]:`, err.message || err);
     }
 }
 

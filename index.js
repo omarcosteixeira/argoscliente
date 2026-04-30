@@ -17,6 +17,12 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('[PROMISE REJEITADA NÃO TRATADA]:', reason);
 });
 
+// Captura se o Railway tentar matar o processo (Ajuda a entender os reboots)
+process.on('SIGTERM', () => {
+    console.log('\n[SISTEMA] Sinal SIGTERM recebido do Railway. O servidor está a ser reiniciado ou forçado a parar.');
+    process.exit(0);
+});
+
 // --- DIRETÓRIO BASE DE AUTENTICAÇÃO ---
 const authBaseFolder = './auth';
 if (!fs.existsSync(authBaseFolder)) {
@@ -27,8 +33,6 @@ if (!fs.existsSync(authBaseFolder)) {
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// --- CONFIGURAÇÃO DE CORS (CORRIGIDA) ---
-// Removemos a duplicação de cabeçalhos que estava a causar o bloqueio no navegador
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -38,14 +42,12 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ROTA DE SAÚDE RAIZ
 app.get('/', (req, res) => {
     res.status(200).send("ARGO'S MULTI-DEVICE SYSTEM ONLINE!");
 });
 
 // --- CONFIGURAÇÃO DA IA GROQ ---
 const groq = new Groq({
-    // Lê do Railway primeiro. Se não achar, usa a sua chave nova diretamente!
     apiKey: process.env.GROQ_API_KEY || "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"
 });
 
@@ -62,10 +64,35 @@ Diretrizes de Resposta:
 6. Nunca invente dados de pedidos. Direcione o cliente para o painel do site se necessário.`;
 
 // =====================================================================
-// 🤖 GESTOR DE MÚLTIPLOS BOTS (MULTI-DEVICE)
+// 🤖 GESTOR DE MÚLTIPLOS BOTS E FILA DE MENSAGENS (MULTI-DEVICE)
 // =====================================================================
-// Estrutura: { "5524999999999": { sock, isAutoReplyActive, sessions, status, pairingCode, qr } }
 const botInstances = {};
+
+// Função assíncrona ultra-leve para processar a fila sem estourar a RAM
+async function processQueue(botNumber) {
+    const instance = botInstances[botNumber];
+    if (!instance) return;
+
+    // Enquanto houver itens na lista de espera
+    while (instance.sendQueue && instance.sendQueue.length > 0) {
+        // Retira o primeiro item da fila
+        const { jid, text } = instance.sendQueue.shift();
+        
+        try {
+            // Atraso de 1.5s a 3.5s entre disparos para não ser banido nem travar a CPU
+            const waitTime = 1500 + Math.floor(Math.random() * 2000);
+            await delay(waitTime);
+
+            await instance.sock.sendMessage(jid, { text });
+            console.log(`[DISPARO] Mensagem enviada para ${jid} via bot ${botNumber} | Restam: ${instance.sendQueue.length}`);
+        } catch (e) {
+            console.error(`[ERRO DISPARO] Falha ao enviar para ${jid}:`, e.message || e);
+        }
+    }
+    
+    // Fila terminou
+    instance.isProcessingQueue = false;
+}
 
 async function startBot(botNumber) {
     if (botInstances[botNumber] && botInstances[botNumber].sock) {
@@ -81,13 +108,13 @@ async function startBot(botNumber) {
     if (!botInstances[botNumber]) {
         botInstances[botNumber] = {
             sock: null,
-            // A IA AGORA INICIA DESLIGADA POR PADRÃO.
-            // O seu painel deve enviar a requisição para a ligar.
             isAutoReplyActive: false, 
             sessions: {},
             status: 'initializing',
             pairingCode: null,
-            qr: null
+            qr: null,
+            sendQueue: [], // Lista física (Array) muito mais leve
+            isProcessingQueue: false
         };
     } else {
         botInstances[botNumber].status = 'initializing';
@@ -102,7 +129,6 @@ async function startBot(botNumber) {
             auth: state,
             logger: pino({ level: 'silent' }), 
             printQRInTerminal: false,
-            // Retornado para Ubuntu/Chrome pois é o padrão mais estável para o Pairing Code
             browser: Browsers.ubuntu('Chrome'), 
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
@@ -116,7 +142,6 @@ async function startBot(botNumber) {
 
         sock.ev.on('creds.update', saveCreds);
 
-        // --- SISTEMA DE EMPARELHAMENTO POR CÓDIGO E QR CODE ---
         if (!state.creds.registered) {
             botInstances[botNumber].status = 'pairing';
             console.log(`\n[SISTEMA] A preparar autenticação para: ${botNumber}...`);
@@ -140,17 +165,8 @@ async function startBot(botNumber) {
         sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect, qr } = update;
 
-            // --- TRATAMENTO DO QR CODE ---
             if (qr) {
                 botInstances[botNumber].qr = qr; 
-                const linkQrCode = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qr)}`;
-                
-                console.log(`\n======================================================`);
-                console.log(`📱 QR CODE GERADO PARA ${botNumber}`);
-                console.log(`Pode usar o código acima OU aceder ao link abaixo para digitalizar:`);
-                console.log(`${linkQrCode}`);
-                console.log(`======================================================\n`);
-                
                 qrcode.generate(qr, { small: true });
             }
 
@@ -170,8 +186,7 @@ async function startBot(botNumber) {
                     botInstances[botNumber].sock = null; 
                     setTimeout(() => startBot(botNumber), 5000); 
                 } else {
-                    console.log(`[SISTEMA - ${botNumber}] O dispositivo terminou a sessão ou foi bloqueado por segurança (Erro ${statusCode}).`);
-                    console.log(`[SISTEMA - ${botNumber}] A apagar sessão corrompida para evitar loop...`);
+                    console.log(`[SISTEMA - ${botNumber}] O dispositivo terminou a sessão ou foi bloqueado por segurança.`);
                     try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch(e) {}
                     delete botInstances[botNumber];
                 }
@@ -188,7 +203,6 @@ async function startBot(botNumber) {
             let msg = m.messages[0];
             if (!msg.message || msg.key.fromMe || msg.key.remoteJid?.endsWith("@g.us")) return;
             
-            // Se a IA estiver desligada (padrão), o bot não faz nada (ignora a mensagem automaticamente).
             if (!botInstances[botNumber].isAutoReplyActive) return;
 
             const jid = msg.key.remoteJid;
@@ -201,7 +215,7 @@ async function startBot(botNumber) {
     } catch (error) {
         console.error(`[ERRO CRÍTICO] Falha ao iniciar o bot ${botNumber}:`, error);
         botInstances[botNumber].status = 'error';
-        botInstances[botNumber].sock = null; // Assegura que pode tentar novamente
+        botInstances[botNumber].sock = null; 
         setTimeout(() => startBot(botNumber), 10000);
     }
 }
@@ -234,21 +248,27 @@ async function handleAIProcess(botNumber, jid, text) {
 // 🌐 ROTAS DA API PARA O SITE DE GESTÃO (GESTAOPRO)
 // =====================================================================
 
-// 1. LIGAR NOVO NÚMERO (Gera Código de Emparelhamento)
+// Função auxiliar para garantir o DDI 55 (Brasil) automaticamente
+function formatNumberBR(number) {
+    let clean = number.toString().replace(/\D/g, '');
+    // Se o número tiver 10 ou 11 dígitos (ex: 24999998888) e não começar por 55, adiciona o 55
+    if ((clean.length === 10 || clean.length === 11) && !clean.startsWith('55')) {
+        clean = '55' + clean;
+    }
+    return clean;
+}
+
 app.post('/api/connect', async (req, res) => {
     const { botNumber } = req.body;
     if (!botNumber) return res.status(400).json({ error: "O campo 'botNumber' é obrigatório." });
 
-    const cleanNumber = botNumber.replace(/\D/g, '');
+    const cleanNumber = formatNumberBR(botNumber);
     await startBot(cleanNumber);
     
-    res.json({ 
-        success: true, 
-        message: `Processo de ligação iniciado para ${cleanNumber}. Verifique a rota /api/status para obter o código de emparelhamento.` 
-    });
+    res.json({ success: true, message: `Processo de ligação iniciado para ${cleanNumber}.` });
 });
 
-// 2. ENVIAR MENSAGEM (Com Sistema de Fila para Disparos em Massa)
+// 2. ENVIAR MENSAGEM (Com Novo Sistema de Fila Físico - Otimizado para RAM)
 app.post('/api/send', (req, res) => {
     const { botNumber, number, message } = req.body;
     
@@ -256,82 +276,69 @@ app.post('/api/send', (req, res) => {
         return res.status(400).json({ error: "Os campos 'botNumber', 'number' e 'message' são obrigatórios." });
     }
 
-    const instance = botInstances[botNumber];
+    const cleanBotNumber = formatNumberBR(botNumber);
+    const instance = botInstances[cleanBotNumber];
+    
     if (!instance || !instance.sock || instance.status !== 'online') {
-        return res.status(503).json({ error: `O bot ${botNumber} não está ligado.` });
+        return res.status(503).json({ error: `O bot ${cleanBotNumber} não está ligado.` });
     }
 
-    const jid = `${number.replace(/\D/g, '')}@s.whatsapp.net`;
+    const cleanRecipient = formatNumberBR(number);
+    const jid = `${cleanRecipient}@s.whatsapp.net`;
 
-    // Cria a fila de envios se não existir para este bot
-    if (!instance.sendQueue) {
-        instance.sendQueue = Promise.resolve();
+    // Garante que a fila de array existe
+    if (!instance.sendQueue) instance.sendQueue = [];
+
+    // Adiciona à lista de espera na memória base
+    instance.sendQueue.push({ jid, text: message });
+
+    // Se o motorista da fila estiver parado, mandamos ele arrancar
+    if (!instance.isProcessingQueue) {
+        instance.isProcessingQueue = true;
+        processQueue(cleanBotNumber);
     }
 
-    // Adiciona a mensagem à fila para ser processada em background
-    instance.sendQueue = instance.sendQueue.then(async () => {
-        try {
-            // Atraso de segurança aleatório entre 1.5s e 3.5s (Impede que o WhatsApp bloqueie por Spam e o Railway trave)
-            const waitTime = 1500 + Math.floor(Math.random() * 2000);
-            await delay(waitTime);
-
-            await instance.sock.sendMessage(jid, { text: message });
-            console.log(`[DISPARO] Mensagem enviada para ${jid} via bot ${botNumber}`);
-        } catch (e) {
-            console.error(`[ERRO DISPARO] Falha ao enviar para ${jid}:`, e.message);
-        }
-    }).catch(err => console.error("Erro na fila de envio:", err));
-
-    // O Servidor responde IMEDIATAMENTE ao seu site, sem esperar a mensagem sair do telemóvel.
-    // Isto elimina para sempre o "Erro de rede / CORS / Offline" na sua tela.
-    res.json({ success: true, message: "Mensagem adicionada à fila de disparo!" });
+    res.json({ success: true, message: `Adicionado à fila. Faltam processar: ${instance.sendQueue.length}` });
 });
 
-// 3. LIGAR/DESLIGAR IA POR NÚMERO
 app.post('/api/toggle', (req, res) => {
     const { botNumber, active } = req.body;
-    
     if (!botNumber) return res.status(400).json({ error: "O campo 'botNumber' é obrigatório." });
     
-    if (botInstances[botNumber]) {
-        botInstances[botNumber].isAutoReplyActive = active === true;
-        res.json({ success: true, botNumber, active: botInstances[botNumber].isAutoReplyActive });
+    const cleanBotNumber = formatNumberBR(botNumber);
+
+    if (botInstances[cleanBotNumber]) {
+        botInstances[cleanBotNumber].isAutoReplyActive = active === true;
+        res.json({ success: true, botNumber: cleanBotNumber, active: botInstances[cleanBotNumber].isAutoReplyActive });
     } else {
-        res.status(404).json({ error: `Bot ${botNumber} não encontrado.` });
+        res.status(404).json({ error: `Bot ${cleanBotNumber} não encontrado.` });
     }
 });
 
-// 4. RESETAR SESSÃO CORROMPIDA (Remove erros de 'Bad MAC')
 app.post('/api/reset', (req, res) => {
     const { botNumber } = req.body;
     if (!botNumber) return res.status(400).json({ error: "O campo 'botNumber' é obrigatório." });
 
-    const cleanNumber = botNumber.replace(/\D/g, '');
+    const cleanNumber = formatNumberBR(botNumber);
     const authFolder = `${authBaseFolder}/${cleanNumber}`;
     
     try {
-        // Desliga a instância se estiver em loop/online
         if (botInstances[cleanNumber] && botInstances[cleanNumber].sock) {
             botInstances[cleanNumber].sock.logout().catch(() => {});
             botInstances[cleanNumber].sock.end(undefined);
         }
         
-        // Apaga fisicamente a pasta de chaves corrompidas do Railway
         if (fs.existsSync(authFolder)) {
             fs.rmSync(authFolder, { recursive: true, force: true });
         }
         
-        // Remove da memória do bot
         delete botInstances[cleanNumber];
-        
-        console.log(`[SISTEMA] Sessão do número ${cleanNumber} foi limpa (Reset manual).`);
-        res.json({ success: true, message: `A sessão corrompida de ${cleanNumber} foi completamente apagada. Pode gerar um novo código de ligação agora!` });
+        res.json({ success: true, message: `A sessão corrompida de ${cleanNumber} foi apagada.` });
     } catch (error) {
         res.status(500).json({ error: "Erro ao tentar limpar a sessão: " + error.message });
     }
 });
 
-// 5. ESTADO GLOBAL (Lista todos os bots, se estão online e os códigos de emparelhamento gerados)
 app.get('/api/status', (req, res) => {
     const statusData = {};
     for (const [number, instance] of Object.entries(botInstances)) {
@@ -339,8 +346,9 @@ app.get('/api/status', (req, res) => {
             status: instance.status,
             autoReply: instance.isAutoReplyActive,
             pairingCode: instance.pairingCode,
-            qrCode: instance.qr, // A string bruta do QR Code
-            qrUrl: instance.qr ? `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(instance.qr)}` : null // Link direto para a imagem
+            qrCode: instance.qr, 
+            qrUrl: instance.qr ? `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(instance.qr)}` : null,
+            queueLength: instance.sendQueue ? instance.sendQueue.length : 0
         };
     }
 
@@ -351,16 +359,13 @@ app.get('/api/status', (req, res) => {
     });
 });
 
-// ESCUTA O SERVIDOR E AUTO-LOADER
 app.listen(PORT, "0.0.0.0", () => {
     console.log(`[SERVER] API Multi-Device a correr em 0.0.0.0:${PORT}`);
     
-    // Auto-Loader: Lê a pasta authBaseFolder e tenta ligar todos os números que já estavam registados
     setTimeout(() => {
         try {
             const folders = fs.readdirSync(authBaseFolder);
             folders.forEach(folder => {
-                // Verifica se a pasta tem apenas números (formato de telefone)
                 if (/^\d+$/.test(folder)) {
                     console.log(`[AUTO-LOADER] A inicializar sessão guardada para: ${folder}`);
                     startBot(folder);

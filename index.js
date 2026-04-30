@@ -45,7 +45,8 @@ app.get('/', (req, res) => {
 
 // --- CONFIGURAÇÃO DA IA GROQ ---
 const groq = new Groq({
-    apiKey: process.env.GROQ_API_KEY || "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"
+    // Removemos a chave antiga. Agora o bot lê APENAS do painel do Railway
+    apiKey: process.env.GROQ_API_KEY
 });
 
 const PROMPT_ARGOS = `Você é o ARGO'S, o assistente virtual inteligente oficial.

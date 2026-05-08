@@ -17,7 +17,6 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('[PROMISE REJEITADA NÃO TRATADA]:', reason);
 });
 
-// Captura se o Railway tentar matar o processo (Ajuda a entender os reboots)
 process.on('SIGTERM', () => {
     console.log('\n[SISTEMA] Sinal SIGTERM recebido do Railway. O servidor está a ser reiniciado ou forçado a parar.');
     process.exit(0);
@@ -47,8 +46,9 @@ app.get('/', (req, res) => {
 });
 
 // --- CONFIGURAÇÃO DA IA GROQ ---
+// ⚠️ A CHAVE AGORA VEM EXCLUSIVAMENTE DO RAILWAY POR SEGURANÇA ⚠️
 const groq = new Groq({
-    apiKey: process.env.GROQ_API_KEY || "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"
+    apiKey: process.env.GROQ_API_KEY
 });
 
 const PROMPT_ARGOS = `Você é o ARGO'S, o assistente virtual inteligente oficial.
@@ -68,35 +68,26 @@ Diretrizes de Resposta:
 // =====================================================================
 const botInstances = {};
 
-// Função assíncrona ultra-leve para processar a fila sem estourar a RAM
 async function processQueue(botNumber) {
     const instance = botInstances[botNumber];
     if (!instance) return;
 
-    // Enquanto houver itens na lista de espera
     while (instance.sendQueue && instance.sendQueue.length > 0) {
-        
-        // Se a ligação cair (Ex: Erro 503), a fila PAUSA e não perde as mensagens!
         if (instance.status !== 'online' || !instance.sock) {
             console.log(`[FILA] Bot ${botNumber} está offline (Erro 503). Fila em pausa. A aguardar...`);
             await delay(5000);
-            continue; // Volta ao início do ciclo sem remover a mensagem da fila
+            continue; 
         }
 
-        // Retira o primeiro item da fila
         const { jid, text } = instance.sendQueue.shift();
         
         try {
-            // Atraso seguro entre disparos para não ser banido nem travar a CPU
             const waitTime = 2000 + Math.floor(Math.random() * 2000);
             await delay(waitTime);
 
-            // --- VALIDAÇÃO OFICIAL DO WHATSAPP ---
-            // Pergunta ao servidor do WhatsApp se o número existe e qual é o formato correto (corrige o 9 dígito)
             const [waStatus] = await instance.sock.onWhatsApp(jid);
 
             if (waStatus && waStatus.exists) {
-                // Envia para o JID real validado pela Meta
                 await instance.sock.sendMessage(waStatus.jid, { text });
                 console.log(`[DISPARO] Mensagem entregue a ${waStatus.jid} via bot ${botNumber} | Restam: ${instance.sendQueue.length}`);
             } else {
@@ -104,14 +95,12 @@ async function processQueue(botNumber) {
             }
         } catch (e) {
             console.error(`[ERRO DISPARO] Falha ao enviar para ${jid}:`, e.message || e);
-            // Se a falha foi porque a ligação caiu no momento exato do envio, devolve a mensagem à fila
             if (e.message && e.message.toLowerCase().includes('closed')) {
                 instance.sendQueue.unshift({ jid, text });
             }
         }
     }
     
-    // Fila terminou
     instance.isProcessingQueue = false;
 }
 
@@ -134,7 +123,7 @@ async function startBot(botNumber) {
             status: 'initializing',
             pairingCode: null,
             qr: null,
-            sendQueue: [], // Lista física (Array) muito mais leve
+            sendQueue: [], 
             isProcessingQueue: false
         };
     } else {
@@ -153,11 +142,9 @@ async function startBot(botNumber) {
             browser: Browsers.ubuntu('Chrome'), 
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
-            // Aumentado para 30s para reduzir as quedas com o Erro 503
             keepAliveIntervalMs: 30000, 
             syncFullHistory: false, 
             generateHighQualityLinkPreview: false, 
-            // Desligado para evitar conflitos de sessão que geram o erro 503
             markOnlineOnConnect: false 
         });
 
@@ -271,16 +258,11 @@ async function handleAIProcess(botNumber, jid, text) {
 // 🌐 ROTAS DA API PARA O SITE DE GESTÃO (GESTAOPRO)
 // =====================================================================
 
-// Função auxiliar para garantir o DDI 55 (Brasil) e evitar DDD duplicado
 function formatNumberBR(number) {
     let clean = number.toString().replace(/\D/g, '');
-    
-    // CORREÇÃO: Remove o DDD se ele vier duplicado do seu painel (ex: 24249...)
     if (clean.length === 13 && clean.substring(0, 2) === clean.substring(2, 4)) {
         clean = clean.substring(2);
     }
-
-    // Se o número tiver 10 ou 11 dígitos (ex: 24999998888) e não começar por 55, adiciona o 55
     if ((clean.length === 10 || clean.length === 11) && !clean.startsWith('55')) {
         clean = '55' + clean;
     }
@@ -297,7 +279,6 @@ app.post('/api/connect', async (req, res) => {
     res.json({ success: true, message: `Processo de ligação iniciado para ${cleanNumber}.` });
 });
 
-// 2. ENVIAR MENSAGEM (Com Novo Sistema de Fila Físico e Validação da Meta)
 app.post('/api/send', (req, res) => {
     const { botNumber, number, message } = req.body;
     
@@ -315,13 +296,9 @@ app.post('/api/send', (req, res) => {
     const cleanRecipient = formatNumberBR(number);
     const jid = `${cleanRecipient}@s.whatsapp.net`;
 
-    // Garante que a fila de array existe
     if (!instance.sendQueue) instance.sendQueue = [];
-
-    // Adiciona à lista de espera na memória base
     instance.sendQueue.push({ jid, text: message });
 
-    // Se o motorista da fila estiver parado, mandamos ele arrancar
     if (!instance.isProcessingQueue) {
         instance.isProcessingQueue = true;
         processQueue(cleanBotNumber);

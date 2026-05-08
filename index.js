@@ -46,10 +46,8 @@ app.get('/', (req, res) => {
 });
 
 // --- CONFIGURAÇÃO DA IA GROQ ---
-// ⚠️ A CHAVE AGORA VEM EXCLUSIVAMENTE DO RAILWAY POR SEGURANÇA ⚠️
-const groq = new Groq({
-    apiKey: process.env.GROQ_API_KEY
-});
+// A inicialização global foi removida. A IA agora só é carregada dentro da função handleAIProcess 
+// para garantir que o servidor (disparos e WhatsApp) arranca sempre, mesmo sem chave.
 
 const PROMPT_ARGOS = `Você é o ARGO'S, o assistente virtual inteligente oficial.
 Unidade: Angra dos Reis.
@@ -238,7 +236,16 @@ async function handleAIProcess(botNumber, jid, text) {
     session.chat.push({ role: "user", content: text });
     if (session.chat.length > 10) session.chat.shift();
 
+    // ⚠️ VERIFICAÇÃO SEGURA DA CHAVE NO MOMENTO DA RESPOSTA ⚠️
+    if (!process.env.GROQ_API_KEY || process.env.GROQ_API_KEY.trim() === "") {
+        console.error(`[AVISO AI - ${botNumber}]: IA não respondeu. Nenhuma variável 'GROQ_API_KEY' foi encontrada no Railway.`);
+        return;
+    }
+
     try {
+        // Inicializa a IA somente aqui! Se falhar, não afeta o resto do sistema.
+        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+        
         await instance.sock.sendPresenceUpdate("composing", jid);
         const response = await groq.chat.completions.create({
             messages: [{ role: "system", content: PROMPT_ARGOS }, ...session.chat],

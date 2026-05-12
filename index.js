@@ -236,15 +236,18 @@ async function handleAIProcess(botNumber, jid, text) {
     session.chat.push({ role: "user", content: text });
     if (session.chat.length > 10) session.chat.shift();
 
-    // ⚠️ VERIFICAÇÃO SEGURA DA CHAVE NO MOMENTO DA RESPOSTA ⚠️
-    if (!process.env.GROQ_API_KEY || process.env.GROQ_API_KEY.trim() === "") {
-        console.error(`[AVISO AI - ${botNumber}]: IA não respondeu. Nenhuma variável 'GROQ_API_KEY' foi encontrada no Railway.`);
+    // ⚠️ NOVA VERIFICAÇÃO COM CHAVE GARANTIDA ⚠️
+    // Tenta ler do Railway. Se não encontrar, usa a sua chave diretamente!
+    const apiKey = process.env.GROQ_API_KEY || "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";
+
+    if (!apiKey || apiKey.trim() === "") {
+        console.error(`[AVISO AI - ${botNumber}]: IA não respondeu. Nenhuma variável 'GROQ_API_KEY' foi encontrada.`);
         return;
     }
 
     try {
         // Inicializa a IA somente aqui! Se falhar, não afeta o resto do sistema.
-        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+        const groq = new Groq({ apiKey: apiKey });
         
         await instance.sock.sendPresenceUpdate("composing", jid);
         const response = await groq.chat.completions.create({

@@ -204,8 +204,12 @@ async function startBot(botNumber) {
                     console.log(`[LIGAÇÃO - ${botNumber}] O WhatsApp solicitou um reinício. A reconectar imediatamente...`);
                     if (botInstances[botNumber]) botInstances[botNumber].sock = null; 
                     setTimeout(() => startBot(botNumber), 2000);
-                } else if (!isLogout) {
-                    console.log(`[LIGAÇÃO - ${botNumber}] Fechada. Código: ${statusCode}. A tentar reconectar em 5s...`);
+                } 
+                // ⚠️ CORREÇÃO VITAL AQUI ⚠️
+                // Só apaga a sessão se for efetivamente um logout E o número já estiver registado!
+                // Se ainda estiver na fase de emparelhamento (!state.creds.registered), continua a tentar!
+                else if (!isLogout || !state.creds.registered) {
+                    console.log(`[LIGAÇÃO - ${botNumber}] Fechada (Código: ${statusCode}). A tentar reconectar em 5s...`);
                     if (botInstances[botNumber]) botInstances[botNumber].sock = null; 
                     setTimeout(() => startBot(botNumber), 5000); 
                 } else {
@@ -249,7 +253,6 @@ async function startBot(botNumber) {
 
 async function handleAIProcess(botNumber, jid, text) {
     const instance = botInstances[botNumber];
-    // ⚠️ PROTEÇÃO ADICIONADA: Se a instância foi apagada, cancela o processamento da IA
     if (!instance) return; 
 
     if (!instance.sessions[jid]) instance.sessions[jid] = { chat: [] };
@@ -258,8 +261,6 @@ async function handleAIProcess(botNumber, jid, text) {
     session.chat.push({ role: "user", content: text });
     if (session.chat.length > 10) session.chat.shift();
 
-    // ⚠️ NOVA VERIFICAÇÃO COM CHAVE GARANTIDA ⚠️
-    // Tenta ler do Railway. Se não encontrar, usa a sua chave diretamente!
     const apiKey = process.env.GROQ_API_KEY || "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";
 
     if (!apiKey || apiKey.trim() === "") {
@@ -268,7 +269,6 @@ async function handleAIProcess(botNumber, jid, text) {
     }
 
     try {
-        // Inicializa a IA somente aqui! Se falhar, não afeta o resto do sistema.
         const groq = new Groq({ apiKey: apiKey });
         
         await instance.sock.sendPresenceUpdate("composing", jid);

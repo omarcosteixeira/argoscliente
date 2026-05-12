@@ -14,7 +14,7 @@ process.on('uncaughtException', (err) => {
     console.error('[ERRO CRÍTICO NÃO TRATADO]:', err);
 });
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('[PROMISE REJEITADA NÃO TRATADA]:', reason);
+    console.error('[PROMISE REJEITADA NÃO TRATADA]:', reason?.message || reason);
 });
 
 process.on('SIGTERM', () => {
@@ -94,12 +94,17 @@ async function processQueue(botNumber) {
         } catch (e) {
             console.error(`[ERRO DISPARO] Falha ao enviar para ${jid}:`, e.message || e);
             if (e.message && e.message.toLowerCase().includes('closed')) {
-                instance.sendQueue.unshift({ jid, text });
+                // Devolve para a fila apenas se a instância ainda existir
+                if (botInstances[botNumber]) {
+                    botInstances[botNumber].sendQueue.unshift({ jid, text });
+                }
             }
         }
     }
     
-    instance.isProcessingQueue = false;
+    if (botInstances[botNumber]) {
+        botInstances[botNumber].isProcessingQueue = false;
+    }
 }
 
 async function startBot(botNumber) {
@@ -146,26 +151,36 @@ async function startBot(botNumber) {
             markOnlineOnConnect: false 
         });
 
-        botInstances[botNumber].sock = sock;
+        if (botInstances[botNumber]) {
+            botInstances[botNumber].sock = sock;
+        }
 
         sock.ev.on('creds.update', saveCreds);
 
         if (!state.creds.registered) {
-            botInstances[botNumber].status = 'pairing';
+            if (botInstances[botNumber]) botInstances[botNumber].status = 'pairing';
             console.log(`\n[SISTEMA] A preparar autenticação para: ${botNumber}...`);
             
             setTimeout(async () => {
+                // ⚠️ PROTEÇÃO ADICIONADA: Verifica se o bot não foi apagado por uma queda repentina antes de pedir o código
+                if (!botInstances[botNumber]) return;
+
                 try {
                     const code = await sock.requestPairingCode(botNumber);
-                    botInstances[botNumber].pairingCode = code;
-                    console.log(`\n======================================================`);
-                    console.log(`🔐 CÓDIGO DE LIGAÇÃO PARA ${botNumber}: ${code}`);
-                    console.log(`⚠️ ATENÇÃO: Se o WhatsApp avisar sobre "Login Suspeito",`);
-                    console.log(`   clique em "Fui eu" antes de inserir o código!`);
-                    console.log(`======================================================\n`);
+                    // Verifica novamente se a instância sobreviveu à espera
+                    if (botInstances[botNumber]) {
+                        botInstances[botNumber].pairingCode = code;
+                        console.log(`\n======================================================`);
+                        console.log(`🔐 CÓDIGO DE LIGAÇÃO PARA ${botNumber}: ${code}`);
+                        console.log(`⚠️ ATENÇÃO: Se o WhatsApp avisar sobre "Login Suspeito",`);
+                        console.log(`   clique em "Fui eu" antes de inserir o código!`);
+                        console.log(`======================================================\n`);
+                    }
                 } catch (error) {
-                    console.error(`[ERRO] Falha ao solicitar código para ${botNumber}:`, error);
-                    botInstances[botNumber].status = 'error';
+                    console.error(`[ERRO] Falha ao solicitar código para ${botNumber}:`, error.message);
+                    if (botInstances[botNumber]) {
+                        botInstances[botNumber].status = 'error';
+                    }
                 }
             }, 4000);
         }
@@ -173,13 +188,13 @@ async function startBot(botNumber) {
         sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect, qr } = update;
 
-            if (qr) {
+            if (qr && botInstances[botNumber]) {
                 botInstances[botNumber].qr = qr; 
                 qrcode.generate(qr, { small: true });
             }
 
             if (connection === 'close') {
-                botInstances[botNumber].status = 'offline';
+                if (botInstances[botNumber]) botInstances[botNumber].status = 'offline';
                 
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const isLogout = statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 403;
@@ -187,11 +202,11 @@ async function startBot(botNumber) {
                 
                 if (isRestartRequired) {
                     console.log(`[LIGAÇÃO - ${botNumber}] O WhatsApp solicitou um reinício. A reconectar imediatamente...`);
-                    botInstances[botNumber].sock = null; 
+                    if (botInstances[botNumber]) botInstances[botNumber].sock = null; 
                     setTimeout(() => startBot(botNumber), 2000);
                 } else if (!isLogout) {
                     console.log(`[LIGAÇÃO - ${botNumber}] Fechada. Código: ${statusCode}. A tentar reconectar em 5s...`);
-                    botInstances[botNumber].sock = null; 
+                    if (botInstances[botNumber]) botInstances[botNumber].sock = null; 
                     setTimeout(() => startBot(botNumber), 5000); 
                 } else {
                     console.log(`[SISTEMA - ${botNumber}] O dispositivo terminou a sessão ou foi bloqueado por segurança.`);
@@ -199,9 +214,11 @@ async function startBot(botNumber) {
                     delete botInstances[botNumber];
                 }
             } else if (connection === 'open') {
-                botInstances[botNumber].status = 'online';
-                botInstances[botNumber].pairingCode = null; 
-                botInstances[botNumber].qr = null; 
+                if (botInstances[botNumber]) {
+                    botInstances[botNumber].status = 'online';
+                    botInstances[botNumber].pairingCode = null; 
+                    botInstances[botNumber].qr = null; 
+                }
                 console.log(`\n--- ARGO\'S ONLINE PARA O NÚMERO: ${botNumber} ---\n`);
             }
         });
@@ -211,7 +228,7 @@ async function startBot(botNumber) {
             let msg = m.messages[0];
             if (!msg.message || msg.key.fromMe || msg.key.remoteJid?.endsWith("@g.us")) return;
             
-            if (!botInstances[botNumber].isAutoReplyActive) return;
+            if (!botInstances[botNumber] || !botInstances[botNumber].isAutoReplyActive) return;
 
             const jid = msg.key.remoteJid;
             const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
@@ -221,15 +238,20 @@ async function startBot(botNumber) {
         });
 
     } catch (error) {
-        console.error(`[ERRO CRÍTICO] Falha ao iniciar o bot ${botNumber}:`, error);
-        botInstances[botNumber].status = 'error';
-        botInstances[botNumber].sock = null; 
+        console.error(`[ERRO CRÍTICO] Falha ao iniciar o bot ${botNumber}:`, error.message);
+        if (botInstances[botNumber]) {
+            botInstances[botNumber].status = 'error';
+            botInstances[botNumber].sock = null; 
+        }
         setTimeout(() => startBot(botNumber), 10000);
     }
 }
 
 async function handleAIProcess(botNumber, jid, text) {
     const instance = botInstances[botNumber];
+    // ⚠️ PROTEÇÃO ADICIONADA: Se a instância foi apagada, cancela o processamento da IA
+    if (!instance) return; 
+
     if (!instance.sessions[jid]) instance.sessions[jid] = { chat: [] };
     
     const session = instance.sessions[jid];

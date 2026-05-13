@@ -46,9 +46,6 @@ app.get('/', (req, res) => {
 });
 
 // --- CONFIGURAÇÃO DA IA GROQ ---
-// A inicialização global foi removida. A IA agora só é carregada dentro da função handleAIProcess 
-// para garantir que o servidor (disparos e WhatsApp) arranca sempre, mesmo sem chave.
-
 const PROMPT_ARGOS = `Você é o ARGO'S, o assistente virtual inteligente oficial.
 Unidade: Angra dos Reis.
 Site de Gestão: gestaopro-five.vercel.app
@@ -162,12 +159,10 @@ async function startBot(botNumber) {
             console.log(`\n[SISTEMA] A preparar autenticação para: ${botNumber}...`);
             
             setTimeout(async () => {
-                // ⚠️ PROTEÇÃO ADICIONADA: Verifica se o bot não foi apagado por uma queda repentina antes de pedir o código
                 if (!botInstances[botNumber]) return;
 
                 try {
                     const code = await sock.requestPairingCode(botNumber);
-                    // Verifica novamente se a instância sobreviveu à espera
                     if (botInstances[botNumber]) {
                         botInstances[botNumber].pairingCode = code;
                         console.log(`\n======================================================`);
@@ -205,9 +200,6 @@ async function startBot(botNumber) {
                     if (botInstances[botNumber]) botInstances[botNumber].sock = null; 
                     setTimeout(() => startBot(botNumber), 2000);
                 } 
-                // ⚠️ CORREÇÃO VITAL AQUI ⚠️
-                // Só apaga a sessão se for efetivamente um logout E o número já estiver registado!
-                // Se ainda estiver na fase de emparelhamento (!state.creds.registered), continua a tentar!
                 else if (!isLogout || !state.creds.registered) {
                     console.log(`[LIGAÇÃO - ${botNumber}] Fechada (Código: ${statusCode}). A tentar reconectar em 5s...`);
                     if (botInstances[botNumber]) botInstances[botNumber].sock = null; 
@@ -255,9 +247,31 @@ async function handleAIProcess(botNumber, jid, text) {
     const instance = botInstances[botNumber];
     if (!instance) return; 
 
-    if (!instance.sessions[jid]) instance.sessions[jid] = { chat: [] };
-    
+    // Inicializa a sessão de conversação e a flag do fluxo de cotação
+    if (!instance.sessions[jid]) instance.sessions[jid] = { chat: [], awaitingCourseDetails: false };
     const session = instance.sessions[jid];
+
+    // =====================================================================
+    // 🎓 FLUXO EXCLUSIVO DE COTAÇÃO ESTÁCIO PARA O NÚMERO 5524992777019
+    // =====================================================================
+    if (botNumber === "5524992777019" && text.toLowerCase().trim() === "#argo's") {
+        const question = "🎓 *Atendimento Exclusivo Estácio - Polo Jacuecanga*\n\nPara eu consultar as informações e valores promocionais, por favor me responda:\n\n1️⃣ Qual o *curso* que você deseja?\n2️⃣ Qual a *metodologia* (Presencial, Semipresencial, Ao Vivo ou EAD)?\n3️⃣ É *Graduação, Pós-graduação ou Curso Técnico*?";
+        
+        // Regista o histórico
+        session.chat.push({ role: "user", content: text });
+        session.chat.push({ role: "assistant", content: question });
+        if (session.chat.length > 10) session.chat.shift();
+        
+        // Ativa a flag informando que a próxima resposta do cliente será sobre os detalhes do curso
+        session.awaitingCourseDetails = true;
+        
+        await instance.sock.sendPresenceUpdate("composing", jid);
+        await delay(1500);
+        await instance.sock.sendMessage(jid, { text: question });
+        return; // Interrompe a execução aqui para não chamar a IA Groq nesta etapa
+    }
+
+    // Regista a mensagem normal do usuário
     session.chat.push({ role: "user", content: text });
     if (session.chat.length > 10) session.chat.shift();
 
@@ -271,9 +285,30 @@ async function handleAIProcess(botNumber, jid, text) {
     try {
         const groq = new Groq({ apiKey: apiKey });
         
+        // Define qual será a instrução da IA (Prompt Padrão ou Prompt Simulador da Estácio)
+        let currentSystemPrompt = PROMPT_ARGOS;
+
+        // Se o robô for o 5524992777019 e estiver aguardando os detalhes do curso...
+        if (botNumber === "5524992777019" && session.awaitingCourseDetails) {
+            currentSystemPrompt = `Você é o ARGO'S. O usuário acabou de responder os detalhes do curso que deseja (nome, metodologia e nível).
+Sua tarefa agora é SIMULAR que você acessou o portal da Estácio neste exato segundo e fez uma busca com os seguintes parâmetros exigidos:
+- Polo: Bairro Jacuecanga, Cidade Angra dos Reis, Estado Rio de Janeiro (RJ)
+- Ingresso: Simplificado
+- Código do Agente Aplicado: 347090
+
+Aja de forma muito entusiasmada! Diga que pesquisou o curso no sistema e encontrou vagas disponíveis com excelentes descontos promocionais ativados pelo nosso código de agente.
+Fale sobre os benefícios de estudar na Estácio no formato escolhido pelo usuário.
+COMO REGRA OBRIGATÓRIA DA SUA RESPOSTA: Você DEVE fornecer este link exato no final da mensagem para o usuário conferir a grade curricular, ver o preço final com bolsa e finalizar a inscrição: https://estacio.br/selecao?cod_agente=347090
+
+Após gerar esta resposta simulada, encerre o assunto da cotação de forma educada.`;
+            
+            // Desliga a flag para que as próximas mensagens voltem ao atendimento normal
+            session.awaitingCourseDetails = false; 
+        }
+        
         await instance.sock.sendPresenceUpdate("composing", jid);
         const response = await groq.chat.completions.create({
-            messages: [{ role: "system", content: PROMPT_ARGOS }, ...session.chat],
+            messages: [{ role: "system", content: currentSystemPrompt }, ...session.chat],
             model: "llama-3.1-8b-instant",
             temperature: 0.6
         });

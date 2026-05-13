@@ -297,10 +297,18 @@ Sua tarefa agora é SIMULAR que você acessou o portal da Estácio neste exato s
 - Código do Agente Aplicado: 347090
 
 Aja de forma muito entusiasmada! Diga que pesquisou o curso no sistema e encontrou vagas disponíveis com excelentes descontos promocionais ativados pelo nosso código de agente.
-Fale sobre os benefícios de estudar na Estácio no formato escolhido pelo usuário.
-COMO REGRA OBRIGATÓRIA DA SUA RESPOSTA: Você DEVE fornecer este link exato no final da mensagem para o usuário conferir a grade curricular, ver o preço final com bolsa e finalizar a inscrição: https://estacio.br/selecao?cod_agente=347090
 
-Após gerar esta resposta simulada, encerre o assunto da cotação de forma educada.`;
+⚠️ REGRA OBRIGATÓRIA - INFORMAR O VALOR:
+Você DEVE informar um preço final para o curso DIRETAMENTE na mensagem! Como você é uma IA simulando a busca, forneça um valor promocional realista e atrativo baseado na metodologia que o cliente escolheu:
+- Se for EAD / Flex: Informe um valor entre R$ 129,00 e R$ 189,00 mensais.
+- Se for Ao Vivo: Informe um valor entre R$ 199,00 e R$ 299,00 mensais.
+- Se for Presencial / Semipresencial: Informe um valor entre R$ 399,00 e R$ 699,00 mensais.
+Apresente este valor como a "Oferta Especial com o Código do Agente aplicado".
+
+Fale rapidamente sobre os benefícios de estudar na Estácio no formato escolhido.
+Por fim, forneça este link exato para o usuário garantir a bolsa com esse preço e finalizar a inscrição: https://estacio.br/selecao?cod_agente=347090
+
+Após gerar esta resposta, encerre o assunto da cotação de forma educada.`;
             
             // Desliga a flag para que as próximas mensagens voltem ao atendimento normal
             session.awaitingCourseDetails = false; 

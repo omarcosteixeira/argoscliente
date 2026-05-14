@@ -91,6 +91,7 @@ async function processQueue(botNumber) {
         } catch (e) {
             console.error(`[ERRO DISPARO] Falha ao enviar para ${jid}:`, e.message || e);
             if (e.message && e.message.toLowerCase().includes('closed')) {
+                // Devolve para a fila apenas se a instância ainda existir
                 if (botInstances[botNumber]) {
                     botInstances[botNumber].sendQueue.unshift({ jid, text });
                 }
@@ -242,73 +243,12 @@ async function startBot(botNumber) {
     }
 }
 
-// =====================================================================
-// 🔍 FUNÇÃO DE BUSCA REAL NO SITE DA ESTÁCIO (Scraper Nativo)
-// =====================================================================
-async function extrairPrecoSiteEstacio(respostaCliente) {
-    try {
-        // Limpa a string do cliente para encontrar apenas o nome do curso (Remove acentos e espaços)
-        const textoLimpo = respostaCliente.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        const palavras = textoLimpo.split(' ');
-        
-        // Pega a palavra mais longa (provavelmente o nome do curso, ex: "enfermagem", "psicologia")
-        const possivelCurso = palavras.sort((a, b) => b.length - a.length)[0];
-        
-        if (!possivelCurso || possivelCurso.length < 4) return "Valores sujeitos a consulta diretamente no link de matrícula.";
-
-        const urlPesquisa = `https://estacio.br/cursos/${possivelCurso}`;
-        console.log(`[BUSCA ESTÁCIO] Tentando extrair preços reais da URL: ${urlPesquisa}`);
-
-        // Faz um pedido HTTP real à página da Estácio
-        const response = await fetch(urlPesquisa, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' }
-        });
-
-        if (!response.ok) return "Preços dinâmicos baseados na metodologia. Consulte o valor exato no link de matrícula.";
-
-        const html = await response.text();
-        
-        // Expressão Regular (Regex) para encontrar padrões de dinheiro (Ex: R$ 149,00 ou R$ 599,00)
-        const regex = /R\$\s*\d{1,3}(?:\.\d{3})*,\d{2}/g;
-        const precosEncontrados = html.match(regex);
-        
-        if (precosEncontrados && precosEncontrados.length > 0) {
-            // Remove valores repetidos e seleciona os 3 primeiros preços reais encontrados na página
-            const valoresUnicos = [...new Set(precosEncontrados)].slice(0, 3);
-            return `O sistema encontrou as seguintes faixas de mensalidade reais no site para este curso: ${valoresUnicos.join(' / ')}.`;
-        }
-
-        return "O valor exato com a bolsa só será exibido na etapa final do link.";
-    } catch (e) {
-        console.error("[ERRO BUSCA ESTÁCIO]:", e.message);
-        return "O valor da mensalidade deve ser verificado diretamente no link com o código do agente aplicado.";
-    }
-}
-
 async function handleAIProcess(botNumber, jid, text) {
     const instance = botInstances[botNumber];
     if (!instance) return; 
 
-    if (!instance.sessions[jid]) instance.sessions[jid] = { chat: [], awaitingCourseDetails: false };
+    if (!instance.sessions[jid]) instance.sessions[jid] = { chat: [] };
     const session = instance.sessions[jid];
-
-    // =====================================================================
-    // 🎓 FLUXO EXCLUSIVO DE COTAÇÃO ESTÁCIO PARA O NÚMERO 5524992777019
-    // =====================================================================
-    if (botNumber === "5524992777019" && text.toLowerCase().trim() === "#argo's") {
-        const question = "🎓 *Atendimento Exclusivo Estácio - Polo Jacuecanga*\n\nPara eu consultar as informações e valores promocionais, por favor me responda em uma frase:\n\n1️⃣ Qual o *curso*?\n2️⃣ Qual a *metodologia* (Presencial, Semipresencial, Ao Vivo ou EAD)?\n3️⃣ É *Graduação, Pós ou Técnico*?";
-        
-        session.chat.push({ role: "user", content: text });
-        session.chat.push({ role: "assistant", content: question });
-        if (session.chat.length > 10) session.chat.shift();
-        
-        session.awaitingCourseDetails = true;
-        
-        await instance.sock.sendPresenceUpdate("composing", jid);
-        await delay(1500);
-        await instance.sock.sendMessage(jid, { text: question });
-        return; 
-    }
 
     session.chat.push({ role: "user", content: text });
     if (session.chat.length > 10) session.chat.shift();
@@ -322,36 +262,10 @@ async function handleAIProcess(botNumber, jid, text) {
 
     try {
         const groq = new Groq({ apiKey: apiKey });
-        let currentSystemPrompt = PROMPT_ARGOS;
-
-        // Se o robô for o 5524992777019 e estiver a aguardar os detalhes do curso...
-        if (botNumber === "5524992777019" && session.awaitingCourseDetails) {
-            
-            // 1. Faz a extração REAL do preço no site da Estácio em tempo real
-            const precoRealInfo = await extrairPrecoSiteEstacio(text);
-
-            // 2. Injeta o valor real recolhido diretamente no "cérebro" da IA
-            currentSystemPrompt = `Você é o ARGO'S. O usuário informou os detalhes do curso que deseja.
-Sua tarefa agora é SIMULAR que você preencheu os seguintes dados no site:
-- Polo: Bairro Jacuecanga, Angra dos Reis - RJ
-- Ingresso: Simplificado
-- Código do Agente Aplicado: 347090
-
-O nosso sistema interno fez uma busca no site da Estácio e obteve o seguinte dado sobre o preço:
-"${precoRealInfo}"
-
-Aja de forma muito entusiasmada! Diga que verificou a disponibilidade da bolsa para o polo Jacuecanga com o código do agente.
-⚠️ REGRA OBRIGATÓRIA: Utilize os valores fornecidos na mensagem acima para informar o cliente sobre a faixa de preço real da mensalidade. 
-Fale brevemente sobre as vantagens do formato escolhido e, obrigatoriamente, termine a mensagem com o link oficial para matrícula: https://estacio.br/selecao?cod_agente=347090
-
-Após gerar esta resposta, encerre o assunto da cotação.`;
-            
-            session.awaitingCourseDetails = false; 
-        }
         
         await instance.sock.sendPresenceUpdate("composing", jid);
         const response = await groq.chat.completions.create({
-            messages: [{ role: "system", content: currentSystemPrompt }, ...session.chat],
+            messages: [{ role: "system", content: PROMPT_ARGOS }, ...session.chat],
             model: "llama-3.1-8b-instant",
             temperature: 0.6
         });

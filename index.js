@@ -106,10 +106,9 @@ async function processQueue(botNumber) {
 }
 
 // --- INICIALIZADOR DO BOT ---
-// isExplicit=true significa que a ordem veio do clique no botão do painel!
 async function startBot(botNumber, isExplicit = false) {
     
-    // BLOQUEIO FANTASMA: Se o bot estiver marcado como apagado e isto for uma tentativa automática, aborta!
+    // BLOQUEIO FANTASMA: Lápide
     if (!isExplicit && botInstances[botNumber] && botInstances[botNumber].isDeleted) {
         return;
     }
@@ -122,7 +121,6 @@ async function startBot(botNumber, isExplicit = false) {
         return;
     }
 
-    // Se o utilizador clicou explicitamente para ligar, limpamos a lápide e começamos de novo
     if (isExplicit && botInstances[botNumber] && botInstances[botNumber].isDeleted) {
         delete botInstances[botNumber];
     }
@@ -158,7 +156,7 @@ async function startBot(botNumber, isExplicit = false) {
             auth: state,
             logger: pino({ level: 'silent' }), 
             printQRInTerminal: false,
-            browser: ['Ubuntu', 'Chrome', '20.0.04'], // <--- O DISFARCE PERFEITO E APROVADO
+            browser: ['Ubuntu', 'Chrome', '20.0.04'], // DISFARCE DE LINUX PARA BURLAR O BLOQUEIO
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
             keepAliveIntervalMs: 30000, 
@@ -323,7 +321,4 @@ app.post('/api/connect', async (req, res) => {
     // true indica que é uma chamada manual para forçar o arranque!
     await startBot(cleanNumber, true); 
     
-    res.json({ success: true, message: `Processo iniciado para ${cleanNumber}.` });
-});
-
-app.post('/api/connect', async (req, res) => {
+    res.json({ success: true, message: `Processo iniciado para ${

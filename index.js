@@ -153,12 +153,12 @@ async function startBot(botNumber, isExplicit = false) {
         const { version } = await fetchLatestBaileysVersion();
         const { state, saveCreds } = await useMultiFileAuthState(authFolder);
 
-        const sock = makeWASocket({
+       const sock = makeWASocket({
             version,
             auth: state,
             logger: pino({ level: 'silent' }), 
             printQRInTerminal: false,
-            browser: Browsers.macOS('Desktop'), 
+            browser: ['Ubuntu', 'Chrome', '20.0.04'], // <--- O DISFARCE PERFEITO E APROVADO
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
             keepAliveIntervalMs: 30000, 

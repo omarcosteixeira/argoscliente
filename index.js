@@ -1,6 +1,6 @@
 //#region ARGO'S - WhatsApp & API Bridge (Multi-Device)
 
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion, delay, Browsers } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion, delay } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const { Groq } = require('groq-sdk');
 const express = require('express');
@@ -106,7 +106,7 @@ async function processQueue(botNumber) {
 }
 
 // --- INICIALIZADOR DO BOT ---
-// ⚠️ isExplicit=true significa que a ordem veio do clique no botão do painel!
+// isExplicit=true significa que a ordem veio do clique no botão do painel!
 async function startBot(botNumber, isExplicit = false) {
     
     // BLOQUEIO FANTASMA: Se o bot estiver marcado como apagado e isto for uma tentativa automática, aborta!
@@ -158,7 +158,7 @@ async function startBot(botNumber, isExplicit = false) {
             auth: state,
             logger: pino({ level: 'silent' }), 
             printQRInTerminal: false,
-            browser: Browsers.macOS('Desktop'), 
+            browser: ['Ubuntu', 'Chrome', '20.0.04'], // <--- O DISFARCE PERFEITO E APROVADO
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
             keepAliveIntervalMs: 30000, 
@@ -209,7 +209,7 @@ async function startBot(botNumber, isExplicit = false) {
                 
                 if (isRestartRequired) {
                     if (botInstances[botNumber]) botInstances[botNumber].sock = null; 
-                    setTimeout(() => startBot(botNumber, false), 2000); // false = reconexão automática, sujeita ao bloqueio da lápide
+                    setTimeout(() => startBot(botNumber, false), 2000); 
                 } 
                 else if (isLogout) {
                     console.log(`[SISTEMA] A Meta recusou a ligação (Erro ${statusCode}). Limpando memória...`);
@@ -217,7 +217,7 @@ async function startBot(botNumber, isExplicit = false) {
                     if (botInstances[botNumber]) botInstances[botNumber].isDeleted = true;
                 } else {
                     if (botInstances[botNumber]) botInstances[botNumber].sock = null; 
-                    setTimeout(() => startBot(botNumber, false), 5000); // false = reconexão automática
+                    setTimeout(() => startBot(botNumber, false), 5000); 
                 }
             } else if (connection === 'open') {
                 if (botInstances[botNumber]) {
@@ -326,109 +326,4 @@ app.post('/api/connect', async (req, res) => {
     res.json({ success: true, message: `Processo iniciado para ${cleanNumber}.` });
 });
 
-app.post('/api/send', (req, res) => {
-    const { botNumber, number, message } = req.body;
-    if (!botNumber || !number || !message) return res.status(400).json({ error: "Campos obrigatórios em falta." });
-
-    const cleanBotNumber = formatNumberBR(botNumber);
-    const instance = botInstances[cleanBotNumber];
-    
-    if (!instance || !instance.sock || instance.status !== 'online' || instance.isDeleted) {
-        return res.status(503).json({ error: `O bot não está ligado.` });
-    }
-
-    const jid = `${formatNumberBR(number)}@s.whatsapp.net`;
-    if (!instance.sendQueue) instance.sendQueue = [];
-    if (instance.sendQueue.length > 5000) return res.status(429).json({ error: "Fila cheia." });
-
-    instance.sendQueue.push({ jid, text: message });
-
-    if (!instance.isProcessingQueue) {
-        instance.isProcessingQueue = true;
-        processQueue(cleanBotNumber);
-    }
-    res.json({ success: true, message: `Adicionado à fila.` });
-});
-
-app.post('/api/toggle', (req, res) => {
-    const { botNumber, active } = req.body;
-    if (!botNumber) return res.status(400).json({ error: "Falta botNumber." });
-    
-    const cleanBotNumber = formatNumberBR(botNumber);
-    if (botInstances[cleanBotNumber] && !botInstances[cleanBotNumber].isDeleted) {
-        botInstances[cleanBotNumber].isAutoReplyActive = active === true;
-        res.json({ success: true, active: botInstances[cleanBotNumber].isAutoReplyActive });
-    } else {
-        res.status(404).json({ error: `Bot não encontrado.` });
-    }
-});
-
-app.post('/api/reset', (req, res) => {
-    const { botNumber } = req.body;
-    if (!botNumber) return res.status(400).json({ error: "Falta botNumber." });
-
-    const cleanNumber = formatNumberBR(botNumber);
-    const authFolder = `${authBaseFolder}/${cleanNumber}`;
-    
-    try {
-        const instance = botInstances[cleanNumber];
-        if (instance) {
-            instance.isDeleted = true; // ATIVA A LÁPIDE
-            instance.status = 'offline';
-            if (instance.sock) {
-                instance.sock.logout().catch(() => {});
-                instance.sock.end(undefined);
-                if (instance.sock.ws) instance.sock.ws.close();
-            }
-        } else {
-            // Mesmo que o bot já não exista ativamente na RAM, cria uma lápide para matar os timeouts fantasmas
-            botInstances[cleanNumber] = { isDeleted: true, status: 'offline' };
-        }
-
-        if (fs.existsSync(authFolder)) fs.rmSync(authFolder, { recursive: true, force: true });
-        
-        // ⚠️ Não apagamos da botInstances (delete botInstances), mantemos a lápide para bloquear reconexões
-        
-        console.log(`[SISTEMA] Conexão ${cleanNumber} eliminada e bloqueada até religação manual.`);
-        res.json({ success: true, message: `Sessão apagada e bloqueada com sucesso.` });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.get('/api/status', (req, res) => {
-    const statusData = {};
-    for (const [number, instance] of Object.entries(botInstances)) {
-        if (!instance.isDeleted) {
-            statusData[number] = {
-                status: instance.status,
-                autoReply: instance.isAutoReplyActive,
-                pairingCode: instance.pairingCode,
-                qrCode: instance.qr, 
-                queueLength: instance.sendQueue ? instance.sendQueue.length : 0
-            };
-        }
-    }
-    res.json({ system: "ARGO'S MULTI-DEVICE", uptime: process.uptime(), bots: statusData });
-});
-
-// --- RADAR DE ERROS 404 (DETETOR) ---
-app.use((req, res) => {
-    console.log(`\n❌ [ALERTA 404] O GestãoPro tentou chamar uma rota desconhecida:`);
-    console.log(`👉 Método: ${req.method}`);
-    console.log(`👉 Caminho (URL): ${req.url}`);
-    console.log(`------------------------------------------------------\n`);
-    res.status(404).json({ error: "Rota não encontrada pelo ARGO'S", path: req.url });
-});
-
-app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[SERVER] API a correr em 0.0.0.0:${PORT}`);
-    setTimeout(() => {
-        try {
-            const folders = fs.readdirSync(authBaseFolder);
-            folders.forEach(folder => {
-                if (/^\d+$/.test(folder)) startBot(folder, false); 
-            });
-        } catch (e) {}
-    }, 5000);
-});
+app.post('/

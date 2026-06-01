@@ -326,4 +326,4 @@ app.post('/api/connect', async (req, res) => {
     res.json({ success: true, message: `Processo iniciado para ${cleanNumber}.` });
 });
 
-app.post('/
+app.post('/api/connect', async (req, res) => {

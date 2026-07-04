@@ -1,6 +1,6 @@
 //#region ARGO'S - WhatsApp & API Bridge (Multi-Device)
 
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion, delay, Browsers } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion, delay } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const { Groq } = require('groq-sdk');
 const express = require('express');
@@ -60,7 +60,7 @@ Diretrizes de Resposta:
 
 const botInstances = {};
 
-// --- PROCESSADOR DE FILA ---
+// --- PROCESSADOR DE FILA (ATUALIZADO COM CAMUFLAGEM DE DIGITAÇÃO) ---
 async function processQueue(botNumber) {
     const instance = botInstances[botNumber];
     if (!instance || instance.isDeleted) return;
@@ -77,11 +77,9 @@ async function processQueue(botNumber) {
         const { jid, text } = instance.sendQueue.shift();
         
         try {
-            const waitTime = 2000 + Math.floor(Math.random() * 2000);
-            await delay(waitTime);
-
             let targetJid = jid;
             try {
+                // Confirma se o número existe antes de simular digitação
                 const [waStatus] = await instance.sock.onWhatsApp(jid);
                 if (waStatus && waStatus.exists) {
                     targetJid = waStatus.jid; 
@@ -90,10 +88,26 @@ async function processQueue(botNumber) {
                 console.log(`[AVISO] Falha ao verificar número na Meta. Tentando entrega direta...`);
             }
 
+            // 1. Simular inicio da digitação ("Escrevendo...")
+            await instance.sock.sendPresenceUpdate('composing', targetJid);
+
+            // 2. Tempo dinâmico de digitação (Humanização: entre 3 e 7 segundos)
+            const typeTime = 3000 + Math.floor(Math.random() * 4000);
+            await delay(typeTime);
+
+            // 3. Pausar digitação e enviar a mensagem
+            await instance.sock.sendPresenceUpdate('paused', targetJid);
             await instance.sock.sendMessage(targetJid, { text });
+            
             console.log(`[DISPARO] Mensagem entregue a ${targetJid} via bot ${botNumber} | Restam: ${instance.sendQueue.length}`);
+
+            // 4. Pausa extra entre um disparo e outro (Humanização: entre 3 e 5 segundos)
+            const safeDelay = 3000 + Math.floor(Math.random() * 2000);
+            await delay(safeDelay);
+
         } catch (e) {
             console.error(`[ERRO DISPARO] Falha ao enviar para ${jid}:`, e.message || e);
+            // Se a conexão fechar a meio, devolve a mensagem à fila para não a perder
             if (e.message && e.message.toLowerCase().includes('closed') && botInstances[botNumber] && !botInstances[botNumber].isDeleted) {
                 botInstances[botNumber].sendQueue.unshift({ jid, text });
             }
@@ -106,10 +120,8 @@ async function processQueue(botNumber) {
 }
 
 // --- INICIALIZADOR DO BOT ---
-// ⚠️ isExplicit=true significa que a ordem veio do clique no botão do painel!
 async function startBot(botNumber, isExplicit = false) {
     
-    // BLOQUEIO FANTASMA: Se o bot estiver marcado como apagado e isto for uma tentativa automática, aborta!
     if (!isExplicit && botInstances[botNumber] && botInstances[botNumber].isDeleted) {
         return;
     }
@@ -122,7 +134,6 @@ async function startBot(botNumber, isExplicit = false) {
         return;
     }
 
-    // Se o utilizador clicou explicitamente para ligar, limpamos a lápide e começamos de novo
     if (isExplicit && botInstances[botNumber] && botInstances[botNumber].isDeleted) {
         delete botInstances[botNumber];
     }
@@ -153,12 +164,12 @@ async function startBot(botNumber, isExplicit = false) {
         const { version } = await fetchLatestBaileysVersion();
         const { state, saveCreds } = await useMultiFileAuthState(authFolder);
 
-       const sock = makeWASocket({
+        const sock = makeWASocket({
             version,
             auth: state,
             logger: pino({ level: 'silent' }), 
             printQRInTerminal: false,
-            browser: ['Ubuntu', 'Chrome', '20.0.04'], // <--- O DISFARCE PERFEITO E APROVADO
+            browser: ['Ubuntu', 'Chrome', '20.0.04'], 
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
             keepAliveIntervalMs: 30000, 
@@ -209,7 +220,7 @@ async function startBot(botNumber, isExplicit = false) {
                 
                 if (isRestartRequired) {
                     if (botInstances[botNumber]) botInstances[botNumber].sock = null; 
-                    setTimeout(() => startBot(botNumber, false), 2000); // false = reconexão automática, sujeita ao bloqueio da lápide
+                    setTimeout(() => startBot(botNumber, false), 2000); 
                 } 
                 else if (isLogout) {
                     console.log(`[SISTEMA] A Meta recusou a ligação (Erro ${statusCode}). Limpando memória...`);
@@ -217,7 +228,7 @@ async function startBot(botNumber, isExplicit = false) {
                     if (botInstances[botNumber]) botInstances[botNumber].isDeleted = true;
                 } else {
                     if (botInstances[botNumber]) botInstances[botNumber].sock = null; 
-                    setTimeout(() => startBot(botNumber, false), 5000); // false = reconexão automática
+                    setTimeout(() => startBot(botNumber, false), 5000); 
                 }
             } else if (connection === 'open') {
                 if (botInstances[botNumber]) {
@@ -287,6 +298,7 @@ async function handleAIProcess(botNumber, jid, text) {
         await delay(Math.min(reply.length * 15, 3000));
         
         if (botInstances[botNumber] && !botInstances[botNumber].isDeleted) {
+            await instance.sock.sendPresenceUpdate("paused", jid);
             await instance.sock.sendMessage(jid, { text: reply });
         }
     } catch (err) {
@@ -320,7 +332,6 @@ app.post('/api/connect', async (req, res) => {
     if (!botNumber) return res.status(400).json({ error: "O campo 'botNumber' é obrigatório." });
     const cleanNumber = formatNumberBR(botNumber);
     
-    // true indica que é uma chamada manual para forçar o arranque!
     await startBot(cleanNumber, true); 
     
     res.json({ success: true, message: `Processo iniciado para ${cleanNumber}.` });
@@ -373,7 +384,7 @@ app.post('/api/reset', (req, res) => {
     try {
         const instance = botInstances[cleanNumber];
         if (instance) {
-            instance.isDeleted = true; // ATIVA A LÁPIDE
+            instance.isDeleted = true;
             instance.status = 'offline';
             if (instance.sock) {
                 instance.sock.logout().catch(() => {});
@@ -381,13 +392,10 @@ app.post('/api/reset', (req, res) => {
                 if (instance.sock.ws) instance.sock.ws.close();
             }
         } else {
-            // Mesmo que o bot já não exista ativamente na RAM, cria uma lápide para matar os timeouts fantasmas
             botInstances[cleanNumber] = { isDeleted: true, status: 'offline' };
         }
 
         if (fs.existsSync(authFolder)) fs.rmSync(authFolder, { recursive: true, force: true });
-        
-        // ⚠️ Não apagamos da botInstances (delete botInstances), mantemos a lápide para bloquear reconexões
         
         console.log(`[SISTEMA] Conexão ${cleanNumber} eliminada e bloqueada até religação manual.`);
         res.json({ success: true, message: `Sessão apagada e bloqueada com sucesso.` });

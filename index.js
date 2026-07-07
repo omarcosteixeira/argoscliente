@@ -2,7 +2,6 @@
 
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion, delay } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
-const { Groq } = require('groq-sdk');
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -79,7 +78,6 @@ async function processQueue(botNumber) {
         try {
             let targetJid = jid;
             try {
-                // Confirma se o número existe antes de simular digitação
                 const [waStatus] = await instance.sock.onWhatsApp(jid);
                 if (waStatus && waStatus.exists) {
                     targetJid = waStatus.jid; 
@@ -88,26 +86,21 @@ async function processQueue(botNumber) {
                 console.log(`[AVISO] Falha ao verificar número na Meta. Tentando entrega direta...`);
             }
 
-            // 1. Simular inicio da digitação ("Escrevendo...")
             await instance.sock.sendPresenceUpdate('composing', targetJid);
 
-            // 2. Tempo dinâmico de digitação (Humanização: entre 3 e 7 segundos)
             const typeTime = 3000 + Math.floor(Math.random() * 4000);
             await delay(typeTime);
 
-            // 3. Pausar digitação e enviar a mensagem
             await instance.sock.sendPresenceUpdate('paused', targetJid);
             await instance.sock.sendMessage(targetJid, { text });
             
             console.log(`[DISPARO] Mensagem entregue a ${targetJid} via bot ${botNumber} | Restam: ${instance.sendQueue.length}`);
 
-            // 4. Pausa extra entre um disparo e outro (Humanização: entre 3 e 5 segundos)
             const safeDelay = 3000 + Math.floor(Math.random() * 2000);
             await delay(safeDelay);
 
         } catch (e) {
             console.error(`[ERRO DISPARO] Falha ao enviar para ${jid}:`, e.message || e);
-            // Se a conexão fechar a meio, devolve a mensagem à fila para não a perder
             if (e.message && e.message.toLowerCase().includes('closed') && botInstances[botNumber] && !botInstances[botNumber].isDeleted) {
                 botInstances[botNumber].sendQueue.unshift({ jid, text });
             }
@@ -270,7 +263,7 @@ async function startBot(botNumber, isExplicit = false) {
     }
 }
 
-// --- INTEGRAÇÃO IA GROQ ---
+// --- INTEGRAÇÃO IA OPENROUTER (VIA VARIÁVEL DE AMBIENTE) ---
 async function handleAIProcess(botNumber, jid, text) {
     const instance = botInstances[botNumber];
     if (!instance || instance.isDeleted) return; 
@@ -282,20 +275,45 @@ async function handleAIProcess(botNumber, jid, text) {
     session.chat.push({ role: "user", content: text });
     if (session.chat.length > 10) session.chat.shift();
 
-    const apiKey = process.env.GROQ_API_KEY || "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";
-    if (!apiKey || apiKey.trim() === "") return;
+    // PUXANDO A CHAVE DIRETAMENTE DO RAILWAY (100% Seguro)
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    
+    if (!apiKey || apiKey.trim() === "") {
+        console.log(`[AVISO] API Key da OpenRouter não encontrada nas variáveis do Railway!`);
+        return;
+    }
 
     try {
-        const groq = new Groq({ apiKey: apiKey });
         await instance.sock.sendPresenceUpdate("composing", jid);
-        const response = await groq.chat.completions.create({
-            messages: [{ role: "system", content: PROMPT_ARGOS }, ...session.chat],
-            model: "llama-3.1-8b-instant",
-            temperature: 0.6
+
+        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://gestaopro-five.vercel.app", 
+                "X-Title": "ARGO'S Bot" 
+            },
+            body: JSON.stringify({
+                model: "meta-llama/llama-3.1-8b-instruct", 
+                messages: [{ role: "system", content: PROMPT_ARGOS }, ...session.chat],
+                temperature: 0.6
+            })
         });
-        const reply = response.choices[0]?.message?.content || "Estou a processar a sua dúvida.";
+
+        const data = await response.json();
+        
+        if (data.error) {
+            console.error(`[ERRO OPENROUTER]:`, data.error.message);
+            return;
+        }
+
+        const reply = data.choices && data.choices[0]?.message?.content ? data.choices[0].message.content : "Estou a processar a sua dúvida.";
+        
         session.chat.push({ role: "assistant", content: reply });
-        await delay(Math.min(reply.length * 15, 3000));
+        
+        const typeTime = Math.min(reply.length * 15, 3000);
+        await delay(typeTime);
         
         if (botInstances[botNumber] && !botInstances[botNumber].isDeleted) {
             await instance.sock.sendPresenceUpdate("paused", jid);

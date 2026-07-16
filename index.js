@@ -59,7 +59,7 @@ Diretrizes de Resposta:
 
 const botInstances = {};
 
-// --- PROCESSADOR DE FILA (ATUALIZADO COM CAMUFLAGEM DE DIGITAÇÃO) ---
+// --- PROCESSADOR DE FILA (ESTRATÉGIA QUEBRA-GELO + 40s PAUSA) ---
 async function processQueue(botNumber) {
     const instance = botInstances[botNumber];
     if (!instance || instance.isDeleted) return;
@@ -73,7 +73,7 @@ async function processQueue(botNumber) {
             continue; 
         }
 
-        const { jid, text } = instance.sendQueue.shift();
+        const { jid, text, clientName } = instance.sendQueue.shift();
         
         try {
             let targetJid = jid;
@@ -86,23 +86,44 @@ async function processQueue(botNumber) {
                 console.log(`[AVISO] Falha ao verificar número na Meta. Tentando entrega direta...`);
             }
 
-            await instance.sock.sendPresenceUpdate('composing', targetJid);
+            // === FASE 1: O QUEBRA GELO ===
+            // 1.1 Descobrir nomes
+            const firstName = clientName ? clientName.trim().split(' ')[0] : '';
+            const greeting = firstName ? `Olá ${firstName}, tudo bem?` : `Olá, tudo bem?`;
+            const botProfileName = instance.sock.authState?.creds?.me?.name || "Consultor";
+            
+            const icebreakerText = `${greeting}\nMeu nome é ${botProfileName}, sou Consultor educacional da Estácio Angra dos reis...`;
 
-            const typeTime = 3000 + Math.floor(Math.random() * 4000);
+            // 1.2 Simular digitação e enviar Quebra-Gelo
+            await instance.sock.sendPresenceUpdate('composing', targetJid);
+            await delay(3000 + Math.floor(Math.random() * 2000)); // Digitando por 3 a 5 segundos
+            await instance.sock.sendPresenceUpdate('paused', targetJid);
+            await instance.sock.sendMessage(targetJid, { text: icebreakerText });
+            console.log(`[QUEBRA-GELO] Enviado para ${targetJid}`);
+
+            // === FASE 2: A ESPERA HUMANIZADA (Os 40 segundos) ===
+            // Em vez de só ficar "escrevendo" por 40s (o que pode ser detectado como bot), 
+            // ele faz uma pausa silenciosa de 35s, e depois simula digitar por 5s.
+            console.log(`[AGUARDANDO] 40s de pausa tática para ${targetJid}...`);
+            await delay(35000); 
+            
+            await instance.sock.sendPresenceUpdate('composing', targetJid);
+            const typeTime = 5000 + Math.floor(Math.random() * 3000); // 5 a 8 segundos
             await delay(typeTime);
 
+            // === FASE 3: A MENSAGEM DO GESTÃO ===
             await instance.sock.sendPresenceUpdate('paused', targetJid);
             await instance.sock.sendMessage(targetJid, { text });
-            
-            console.log(`[DISPARO] Mensagem entregue a ${targetJid} via bot ${botNumber} | Restam: ${instance.sendQueue.length}`);
+            console.log(`[DISPARO PRINCIPAL] Mensagem entregue a ${targetJid} \vert{} Fila Restante:${instance.sendQueue.length}`);
 
-            const safeDelay = 3000 + Math.floor(Math.random() * 2000);
+            // Pausa de segurança extra entre um cliente e outro
+            const safeDelay = 4000 + Math.floor(Math.random() * 3000);
             await delay(safeDelay);
 
         } catch (e) {
             console.error(`[ERRO DISPARO] Falha ao enviar para ${jid}:`, e.message || e);
             if (e.message && e.message.toLowerCase().includes('closed') && botInstances[botNumber] && !botInstances[botNumber].isDeleted) {
-                botInstances[botNumber].sendQueue.unshift({ jid, text });
+                botInstances[botNumber].sendQueue.unshift({ jid, text, clientName });
             }
         }
     }
@@ -185,7 +206,7 @@ async function startBot(botNumber, isExplicit = false) {
                     const code = await sock.requestPairingCode(botNumber);
                     if (botInstances[botNumber] && !botInstances[botNumber].isDeleted) {
                         botInstances[botNumber].pairingCode = code;
-                        console.log(`\n=== CÓDIGO PARA ${botNumber}: ${code} ===\n`);
+                        console.log(`\n=== CÓDIGO PARA ${botNumber}:${code} ===\n`);
                     }
                 } catch (error) {
                     console.error(`[ERRO] Falha ao solicitar código para ${botNumber}:`, error.message);
@@ -275,7 +296,6 @@ async function handleAIProcess(botNumber, jid, text) {
     session.chat.push({ role: "user", content: text });
     if (session.chat.length > 10) session.chat.shift();
 
-    // PUXANDO A CHAVE DIRETAMENTE DO RAILWAY (100% Seguro)
     const apiKey = process.env.OPENROUTER_API_KEY;
     
     if (!apiKey || apiKey.trim() === "") {
@@ -355,8 +375,11 @@ app.post('/api/connect', async (req, res) => {
     res.json({ success: true, message: `Processo iniciado para ${cleanNumber}.` });
 });
 
+// ⚠️ ROTA DE ENVIO ATUALIZADA PARA ACEITAR O NOME DO CLIENTE ⚠️
 app.post('/api/send', (req, res) => {
-    const { botNumber, number, message } = req.body;
+    // Agora esperamos também o parâmetro 'contactName'
+    const { botNumber, number, message, contactName } = req.body;
+    
     if (!botNumber || !number || !message) return res.status(400).json({ error: "Campos obrigatórios em falta." });
 
     const cleanBotNumber = formatNumberBR(botNumber);
@@ -370,7 +393,8 @@ app.post('/api/send', (req, res) => {
     if (!instance.sendQueue) instance.sendQueue = [];
     if (instance.sendQueue.length > 5000) return res.status(429).json({ error: "Fila cheia." });
 
-    instance.sendQueue.push({ jid, text: message });
+    // Adiciona o nome do cliente à fila de processamento
+    instance.sendQueue.push({ jid, text: message, clientName: contactName || "" });
 
     if (!instance.isProcessingQueue) {
         instance.isProcessingQueue = true;
